@@ -62,6 +62,9 @@ class DiskInfo(BaseModel):
 
 class ChromeStatus(BaseModel):
     host_registered: bool
+    last_ping_time: float | None = None
+    last_profile_name: str | None = None
+    all_known_profiles: dict[str, dict] = {}
 
 
 class PickFolderResponse(BaseModel):

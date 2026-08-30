@@ -16,6 +16,7 @@ import os
 import struct
 import subprocess
 import sys
+import time
 import traceback
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,6 +36,7 @@ PID_FILE = os.path.join(APP_DATA_DIR, "app.pid")
 VENV_PYTHON = os.path.join(PROJECT_ROOT, "venv", "bin", "python3")
 RUN_SCRIPT = os.path.join(PROJECT_ROOT, "run.py")
 APP_BUNDLE = "/Applications/FlowDownload.app"
+EXTENSION_STATE_FILE = os.path.join(APP_DATA_DIR, "chrome_extension_state.json")
 
 
 def read_message() -> dict | None:
@@ -70,10 +72,74 @@ def launch_app_if_needed() -> None:
         )
 
 
+def _bring_to_front() -> None:
+    # `open -a` on macOS activates the app if it's already running
+    # (raising its window to the foreground) or launches it if not. This
+    # is the "show_window" path -- separate from launch_app_if_needed
+    # because that one refuses to relaunch when the app is already up.
+    if os.path.isdir(APP_BUNDLE):
+        subprocess.Popen(["open", "-a", APP_BUNDLE], start_new_session=True)
+    else:
+        subprocess.Popen(
+            [VENV_PYTHON, RUN_SCRIPT],
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+
+def _write_extension_state(profile_id: str, profile_name: str) -> None:
+    """Record a heartbeat from the extension so the app can tell which
+    Chrome profile is alive and warn when the extension has been disabled
+    or removed. Preserves any previously-known profiles from the file.
+    """
+    state = {
+        "last_ping": time.time(),
+        "last_profile_id": profile_id,
+        "last_profile_name": profile_name,
+        "profiles": {},
+    }
+    try:
+        with open(EXTENSION_STATE_FILE) as f:
+            old = json.load(f)
+            state["profiles"] = old.get("profiles", {})
+    except (OSError, json.JSONDecodeError):
+        pass
+    state["profiles"][profile_id] = {
+        "name": profile_name,
+        "last_seen": state["last_ping"],
+    }
+    try:
+        os.makedirs(APP_DATA_DIR, exist_ok=True)
+        with open(EXTENSION_STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except OSError:
+        # Don't take down the download path just because we couldn't
+        # write the heartbeat file -- the worst case is a stale status.
+        traceback.print_exc(file=sys.stderr)
+
+
 def handle_message(message: dict) -> dict:
+    action = message.get("action")
+    profile_id = message.get("profile_id") or "unknown"
+    profile_name = message.get("profile_name") or "Unknown"
+
+    # Heartbeat from the extension -- no UI effect, just keeps the state
+    # file fresh so the app can show which profile is alive.
+    if action == "ping":
+        _write_extension_state(profile_id, profile_name)
+        return {"ok": True}
+
+    # "Bring FlowDownload to the front" from the extension popup.
+    if action == "show_window":
+        _bring_to_front()
+        return {"ok": True}
+
     url = message.get("url")
     if not url:
         return {"ok": False, "error": "missing url"}
+
+    _write_extension_state(profile_id, profile_name)
 
     os.makedirs(APP_DATA_DIR, exist_ok=True)
     settings = Settings.load(SETTINGS_PATH)

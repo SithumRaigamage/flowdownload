@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Cookie
+from fastapi.responses import HTMLResponse, FileResponse
+import mimetypes
 
 from app.api.events import EventBroadcaster
 from app.api.main_thread import MainThreadExecutor
@@ -33,6 +35,7 @@ def create_app(
     broadcaster: EventBroadcaster,
     settings_path: str,
     token: str,
+    app_data_dir: str,
 ) -> FastAPI:
     app = FastAPI(title="FlowDownload API")
 
@@ -49,16 +52,28 @@ def create_app(
         # earlier revision of this page served during development could get
         # replayed from cache on a later launch instead of the current file.
         response.headers["Cache-Control"] = "no-store"
+        # Set an HttpOnly cookie so the <video>/<audio> elements can stream
+        # files without needing an Authorization header (they can't send one).
+        response.set_cookie(
+            key="flowdownload_token", value=token,
+            httponly=True, samesite="strict", path="/",
+        )
         return response
 
-    def require_token(authorization: Optional[str] = Header(default=None)) -> None:
+    def require_token(
+        authorization: Optional[str] = Header(default=None),
+        flowdownload_token: Optional[str] = Cookie(default=None),
+    ) -> None:
         # 127.0.0.1-only, but any other local process (or a malicious page,
         # if this were ever opened outside the app's own webview) could
         # otherwise reach it -- the token is regenerated every launch and
-        # only the app itself knows it.
+        # only the app itself knows it. Either the Authorization header
+        # (used by JS fetch() calls) or the HttpOnly cookie set on / (used
+        # by the <video>/<audio> element when streaming a file) is accepted.
         expected = f"Bearer {token}"
-        if authorization != expected:
-            raise HTTPException(status_code=401, detail="Missing or invalid token")
+        if authorization == expected or flowdownload_token == token:
+            return
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
 
     @app.get("/api/downloads", response_model=list[DownloadOut])
     def list_downloads(status: Optional[str] = None, _=Depends(require_token)):
@@ -121,6 +136,33 @@ def create_app(
         subprocess.run(["open", "-R", path], check=False)
         return {"ok": True}
 
+    @app.get("/api/downloads/{task_id}/stream")
+    def stream_download(task_id: str, _=Depends(require_token)):
+        """Stream a completed download file for in-app preview.
+
+        FileResponse handles HTTP Range requests (seeking in video/audio) natively.
+        The caller carries the flowdownload_token cookie so no Authorization header
+        is needed (the <video>/<audio> element can't set one).
+        """
+        def _get():
+            task = manager.tasks.get(task_id)
+            if task is None or task.status != DownloadStatus.COMPLETED:
+                return None
+            if not os.path.exists(task.dest_path):
+                return None
+            return task.dest_path
+
+        dest_path = executor.call(_get)
+        if dest_path is None:
+            raise HTTPException(status_code=404, detail="File not found or not ready")
+
+        media_type, _ = mimetypes.guess_type(dest_path)
+        return FileResponse(
+            dest_path,
+            media_type=media_type or "application/octet-stream",
+            filename=os.path.basename(dest_path),
+        )
+
     @app.get("/api/downloads/{task_id}/log", response_model=list[HistoryEntry])
     def download_log(task_id: str, _=Depends(require_token)):
         return executor.call(lambda: manager.get_history(task_id))
@@ -134,6 +176,10 @@ def create_app(
             return len(ids)
 
         return {"removed": executor.call(_clear)}
+
+    @app.post("/api/downloads/resume-all")
+    def resume_all_downloads(_=Depends(require_token)):
+        return executor.call(lambda: (manager.resume_all(), {"ok": True})[1])
 
     @app.delete("/api/downloads/{task_id}")
     def delete_download(task_id: str, delete_file: bool = False, _=Depends(require_token)):
@@ -184,7 +230,28 @@ def create_app(
 
     @app.get("/api/chrome-status", response_model=ChromeStatus)
     def chrome_status(_=Depends(require_token)):
-        return ChromeStatus(host_registered=NATIVE_HOST_MANIFEST.exists())
+        # host_registered stays as the "is the wiring set up" signal (the
+        # manifest file exists). The per-profile fields are the new "is the
+        # extension actually alive, and which profile is it in" signals --
+        # the native host writes a heartbeat every 20s with the active
+        # profile identity, so a stale last_ping_time means the extension
+        # was disabled or removed even though the manifest is still on disk.
+        state = {
+            "host_registered": NATIVE_HOST_MANIFEST.exists(),
+            "last_ping_time": None,
+            "last_profile_name": None,
+            "all_known_profiles": {},
+        }
+        extension_state_file = os.path.join(app_data_dir, "chrome_extension_state.json")
+        try:
+            with open(extension_state_file) as f:
+                raw = json.load(f)
+                state["last_ping_time"] = raw.get("last_ping")
+                state["last_profile_name"] = raw.get("last_profile_name")
+                state["all_known_profiles"] = raw.get("profiles", {})
+        except (OSError, json.JSONDecodeError):
+            pass
+        return ChromeStatus(**state)
 
     @app.post("/api/pick-folder", response_model=PickFolderResponse)
     def pick_folder(_=Depends(require_token)):

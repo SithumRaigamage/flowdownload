@@ -148,6 +148,13 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .titlebar{
   display:flex;align-items:center;gap:12px;height:38px;padding:0 12px;flex:none;
   background:var(--card);border-bottom:1px solid var(--border);-webkit-user-select:none;user-select:none;
+  -webkit-app-region:drag;
+}
+.titlebar button,
+.titlebar select,
+.titlebar input,
+.titlebar [role="switch"] {
+  -webkit-app-region:no-drag;
 }
 .lights{display:flex;gap:7px;padding-right:4px}
 .light{width:11px;height:11px;border-radius:99px}
@@ -399,6 +406,16 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
           <option value="progress">Progress</option>
         </select>
         <div class="tb-sep"></div>
+        <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted-foreground);-webkit-app-region:no-drag">
+          <span>Slots:</span>
+          <button class="btn btn-ghost btn-icon btn-sm" id="decSlot" aria-label="Fewer concurrent downloads" title="Fewer concurrent downloads">−</button>
+          <span class="mono" id="slotCount" style="min-width:18px;text-align:center">3</span>
+          <button class="btn btn-ghost btn-icon btn-sm" id="incSlot" aria-label="More concurrent downloads" title="More concurrent downloads">+</button>
+        </div>
+        <button class="btn btn-outline" id="startAllBtn" title="Start all paused and queued downloads">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+          Start all
+        </button>
         <button class="btn btn-outline" id="pauseAllBtn">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
           Pause all
@@ -516,7 +533,7 @@ const fmtEta=s=>{ if(!isFinite(s)||s<=0) return "—";
   return Math.floor(s/3600)+"h "+Math.round(s%3600/60)+"m"; };
 const fmtTime=epochSec=>{ const d=new Date(epochSec*1000); return d.toTimeString().slice(0,8); };
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const pct=d=>d.size?d.received/d.size:0;
+const pct=d=>d.size>0?Math.min(1,Math.max(0,d.received/d.size)):0;
 
 /* ---------- toasts ---------- */
 const ICONS={ok:'<path d="M20 6 9 17l-5-5"/>',warn:'<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',err:'<circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'};
@@ -544,18 +561,32 @@ function renderFilters(){
 function renderSystem(){
   const active = downloads.filter(d=>d.state==="downloading"||d.state==="retrying").length;
   document.getElementById("slotsLabel").textContent = active+" / "+settingsCache.max_concurrent_downloads;
+  document.getElementById("slotCount").textContent = settingsCache.max_concurrent_downloads;
   if(diskCache){
     document.getElementById("diskLabel").textContent = fmtBytes(diskCache.free_bytes)+" free";
-    const usedPct = diskCache.total_bytes ? 100*(1-diskCache.free_bytes/diskCache.total_bytes) : 0;
-    document.getElementById("diskBar").style.width = Math.max(2,Math.min(100,usedPct))+"%";
+    const usedPct = diskCache.total_bytes > 0
+      ? Math.max(0, Math.min(100, 100 * (1 - diskCache.free_bytes / diskCache.total_bytes)))
+      : 0;
+    document.getElementById("diskBar").style.width = usedPct + "%";
   }
   const badge=document.getElementById("chromeBadge"), text=document.getElementById("chromeText");
   if(chromeCache){
     badge.textContent = chromeCache.host_registered ? "Registered" : "Missing";
     badge.className = "badge badge-"+(chromeCache.host_registered ? "completed" : "failed");
-    text.textContent = chromeCache.host_registered
-      ? "Native host is registered — downloads Chrome hands off will appear here."
-      : "Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.";
+    if(chromeCache.host_registered && chromeCache.last_profile_name){
+      const ageSec = (Date.now()/1000) - (chromeCache.last_ping_time || 0);
+      const stale = ageSec > 60;
+      const known = chromeCache.all_known_profiles || {};
+      const knownCount = Object.keys(known).length;
+      const profilePart = knownCount > 1
+        ? "Active: "+chromeCache.last_profile_name+" (+"+(knownCount-1)+" other"+(knownCount>2?"s":"")+")"
+        : "Active: "+chromeCache.last_profile_name;
+      text.textContent = profilePart + (stale ? " — last seen "+Math.round(ageSec/60)+" min ago" : "");
+    } else if(chromeCache.host_registered){
+      text.textContent = "Native host is registered, but no extension is reporting. Reload the extension in Chrome.";
+    } else {
+      text.textContent = "Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.";
+    }
   }
 }
 
@@ -574,8 +605,10 @@ function visible(){
 }
 
 function segbarHTML(d){
-  return '<div class="segbar" data-state="'+d.state+'" role="progressbar" aria-valuenow="'+Math.round(pct(d)*100)+'" aria-valuemin="0" aria-valuemax="100">'+
-    '<i style="width:'+(pct(d)*100)+'%"></i></div>';
+  const p = pct(d);
+  const w = isFinite(p) ? p*100 : 0;
+  return '<div class="segbar" data-state="'+d.state+'" role="progressbar" aria-valuenow="'+Math.round(w)+'" aria-valuemin="0" aria-valuemax="100">'+
+    '<i style="width:'+w+'%"></i></div>';
 }
 
 function rowMeta(d){
@@ -585,7 +618,8 @@ function rowMeta(d){
   if(d.state==="retrying")  return '<div class="rspeed" style="color:var(--warning)">Retrying</div><div class="reta">'+Math.round(pct(d)*100)+'%</div>';
   if(d.state==="paused")    return '<div class="rspeed" style="color:var(--muted-foreground)">Paused</div><div class="reta">'+Math.round(pct(d)*100)+'%</div>';
   if(d.state==="queued")    return '<div class="rspeed" style="color:var(--muted-foreground)">Queued</div><div class="reta">'+fmtBytes(d.size)+'</div>';
-  return '<div class="rspeed mono">'+fmtSpeed(d.speedBps)+'</div><div class="reta mono">'+fmtEta((d.size-d.received)/(d.speedBps||1))+' left</div>';
+  const etaText = d.speedBps > 0 ? fmtEta((d.size-d.received)/d.speedBps)+' left' : '—';
+  return '<div class="rspeed mono">'+fmtSpeed(d.speedBps)+'</div><div class="reta mono">'+etaText+'</div>';
 }
 
 const PLAY='<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
@@ -635,6 +669,7 @@ function renderList(){
           (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume">'+PLAY+'</button>':'')+
           (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry">'+RETRY+'</button>':'')+
           (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder">'+FOLDER+'</button>':'')+
+          (MEDIA_RE.test(d.name) && d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview">'+PLAY+'</button>':'')+
           '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More">'+DOTS+'</button>'+
         '</div>'+
       '</div>'+
@@ -657,13 +692,22 @@ function buildTimeline(entries){
   return bars;
 }
 
+const MEDIA_EXTS = ["mp4","mov","webm","mkv","avi","vid","mp3","wav","aac","m4a","flac","ogg"];
+const MEDIA_RE = /\.(mp4|mov|webm|mkv|avi|vid|mp3|wav|aac|m4a|flac|ogg)$/i;
+
+function isMediaDownload(d){
+  if(d.state !== "completed") return false;
+  const ext = (d.name.split(".").pop() || "").toLowerCase();
+  return MEDIA_EXTS.includes(ext);
+}
+
 function renderSheet(){
   const sheet=document.getElementById("sheet");
   const d=downloads.find(x=>x.id===ui.activeId);
   if(!d){ sheet.classList.add("hidden"); return; }
   sheet.classList.remove("hidden");
 
-  const tabs=["overview","timeline","log","headers"];
+  const tabs=["overview","preview","timeline","log","headers"];
   let body="";
 
   if(ui.tab==="overview"){
@@ -671,7 +715,7 @@ function renderSheet(){
       '<dt>Status</dt><dd><span class="badge badge-'+d.state+'">'+d.state+'</span></dd>'+
       '<dt>Progress</dt><dd class="mono">'+fmtBytes(d.received)+' / '+fmtBytes(d.size)+' ('+Math.round(pct(d)*100)+'%)</dd>'+
       '<dt>Speed</dt><dd class="mono">'+fmtSpeed(d.speedBps)+'</dd>'+
-      '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading"?fmtEta((d.size-d.received)/(d.speedBps||1)):"—")+'</dd>'+
+      '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading" && d.speedBps>0 ? fmtEta((d.size-d.received)/d.speedBps) : "—")+'</dd>'+
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
       '<dt>Source</dt><dd class="mono" style="font-size:10.5px">'+esc(d.url)+'</dd>'+
     '</dl><div class="hr"></div><div class="sect">Resume support</div><dl class="kv">'+
@@ -680,6 +724,27 @@ function renderSheet(){
       '<dt>Validator</dt><dd>If-Range checked on every resume</dd>'+
       '<dt>Retry policy</dt><dd>exponential backoff, retried until it succeeds</dd>'+
     '</dl>';
+  }
+
+  if(ui.tab==="preview"){
+    if(d.state !== "completed"){
+      body='<p style="font-size:12px;color:var(--muted-foreground);margin:0">Preview is available once this download finishes.</p>';
+    } else if(isMediaDownload(d)){
+      const ext = (d.name.split(".").pop() || "").toLowerCase();
+      const isVideo = ["mp4","mov","webm","mkv","avi","vid"].includes(ext);
+      const tag = isVideo ? "video" : "audio";
+      const mimeType = isVideo ? "video/mp4" : "audio/mpeg";
+      body='<div style="margin-bottom:10px">'+
+        '<'+tag+' controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block">'+
+          '<source src="/api/downloads/'+d.id+'/stream" type="'+mimeType+'">'+
+          'Your browser does not support '+tag+' playback.'+
+        '</'+tag+'>'+
+      '</div>'+
+      '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
+    } else {
+      body='<p style="font-size:12px;color:var(--muted-foreground);margin:0 0 10px">Preview isn\'t available for this file type.</p>'+
+        '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
+    }
   }
 
   if(ui.tab==="timeline"){
@@ -731,6 +796,7 @@ function renderSheet(){
       (d.state==="paused"||d.state==="queued"?'<button class="btn btn-outline btn-sm" data-act="resume" data-id="'+d.id+'">'+PLAY+' Resume</button>':'')+
       (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-primary btn-sm" data-act="retry" data-id="'+d.id+'">'+RETRY+' Retry</button>':'')+
       (d.state==="completed"?'<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>':'')+
+      (isMediaDownload(d)?'<button class="btn btn-primary btn-sm" data-act="play" data-id="'+d.id+'">'+PLAY+' Preview</button>':'')+
       '<button class="btn btn-ghost btn-sm" data-act="copy" data-id="'+d.id+'">Copy link</button>'+
     '</div></div>'+
     '<div class="tabs" role="tablist">'+tabs.map(t=>'<button class="tab" role="tab" data-tab="'+t+'" aria-selected="'+(ui.tab===t)+'">'+t[0].toUpperCase()+t.slice(1)+'</button>').join("")+'</div>'+
@@ -784,6 +850,7 @@ async function act(id,what){
       try{ await navigator.clipboard.writeText(d.url); toast("ok","Link copied",d.host); }
       catch(_){ toast("err","Couldn't copy link","Clipboard access was blocked"); }
     }
+    else if(what==="play"){ ui.activeId = id; ui.tab = "preview"; render(); }
     else if(what==="remove"){
       await del("/api/downloads/"+id+"?delete_file=false");
       downloads=downloads.filter(x=>x.id!==id); ui.selected.delete(id);
@@ -799,7 +866,9 @@ document.getElementById("list").addEventListener("click",e=>{
   if(cb){ const id=cb.dataset.check; ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); return; }
   const btn=e.target.closest("[data-act]");
   if(btn){ e.stopPropagation();
-    if(btn.dataset.act==="menu") return openMenu(btn,btn.dataset.id);
+    // The dots button is purely a visual hint that a context menu exists;
+    // the menu itself only opens on right-click (see contextmenu handler).
+    if(btn.dataset.act==="menu") return;
     return act(btn.dataset.id,btn.dataset.act); }
   const row=e.target.closest(".row");
   if(row){ ui.activeId = ui.activeId===row.dataset.id ? null : row.dataset.id; ui.tab="overview"; render(); }
@@ -847,6 +916,24 @@ document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
     else if(paused.length){ await Promise.all(paused.map(d=>post("/api/downloads/"+d.id+"/resume"))); toast("info","Resumed all"); }
   }catch(err){ toast("err","Action failed",err.message); }
 });
+document.getElementById("startAllBtn").addEventListener("click",async()=>{
+  try{
+    await post("/api/downloads/resume-all");
+    toast("ok","Starting all","Paused and queued downloads will begin shortly");
+  }catch(err){ toast("err","Couldn't start all",err.message); }
+});
+document.getElementById("decSlot").addEventListener("click",async()=>{
+  const cur=settingsCache.max_concurrent_downloads;
+  if(cur<=1) return;
+  settingsCache = await patch("/api/settings",{max_concurrent_downloads: cur-1});
+  render();
+});
+document.getElementById("incSlot").addEventListener("click",async()=>{
+  const cur=settingsCache.max_concurrent_downloads;
+  if(cur>=20) return;
+  settingsCache = await patch("/api/settings",{max_concurrent_downloads: cur+1});
+  render();
+});
 document.getElementById("themeBtn").addEventListener("click",()=>{
   document.documentElement.classList.toggle("dark");
 });
@@ -862,8 +949,9 @@ document.getElementById("bulkbar").addEventListener("click",async e=>{
     if(w==="retry") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/retry")));
     if(w==="remove"){
       await Promise.all(ids.map(id=>del("/api/downloads/"+id+"?delete_file=false")));
-      downloads=downloads.filter(d=>!ui.selected.has(d.id));
-      if(ui.selected.has(ui.activeId)) ui.activeId=null;
+      downloads=downloads.filter(d=>!ids.includes(d.id));
+      ui.selected = new Set();
+      ui.activeId = null;
     }
     toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
   }catch(err){ toast("err","Bulk action failed",err.message); }
@@ -917,8 +1005,13 @@ function addDialog(prefillUrl){
 
   dlg.querySelector("#addBrowse").onclick=async()=>{
     try{ const r=await post("/api/pick-folder");
-      if(r.path) dlg.querySelector("#addFolder").value=r.path; }
-    catch(err){ toast("err","Couldn't open folder picker",err.message); }
+      if(r.path){
+        dlg.querySelector("#addFolder").value=r.path;
+        // Keep settingsCache in sync so the next "Add download" defaults to
+        // the newly-picked folder (and Settings → Downloads reflects it).
+        settingsCache = await patch("/api/settings",{download_dir:r.path});
+      }
+    }catch(err){ toast("err","Couldn't open folder picker",err.message); }
   };
 
   dlg.querySelector("#addGo").onclick=async()=>{
@@ -945,8 +1038,13 @@ function settingsPanes(){
     Downloads: '<div class="field" style="padding-top:10px"><label class="label">Default folder</label>'+
       '<div style="display:flex;gap:8px"><input class="input mono" id="setDownloadDir" readonly value="'+esc(settingsCache.download_dir)+'" style="flex:1">'+
       '<button class="btn btn-outline btn-sm" id="setBrowseDir">Browse</button></div></div>'+
-      '<div class="field"><label class="label">Downloads at once</label><select class="input" id="setMaxConcurrent" data-select="max_concurrent_downloads">'+
-      [1,2,3,4,5,6,8,10].map(n=>'<option value="'+n+'"'+(n===settingsCache.max_concurrent_downloads?" selected":"")+'>'+n+'</option>').join("")+'</select></div>',
+      '<div class="field"><label class="label">Downloads at once</label>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+
+        '<input class="input mono" type="number" min="1" max="50" step="1" id="setMaxConcurrent" data-input="max_concurrent_downloads" value="'+esc(settingsCache.max_concurrent_downloads)+'" style="flex:1;width:auto">'+
+        '<button class="btn btn-primary btn-sm" id="setMaxSave">Save</button>'+
+      '</div>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately.</p>'+
+      '</div>',
     Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
       '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.")+'</p></div>'+
       '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
@@ -977,11 +1075,17 @@ async function settingsDialog(){
         if(r.path){ settingsCache=await patch("/api/settings",{download_dir:r.path}); refreshTab(); toast("ok","Default folder updated"); } }
       catch(err){ toast("err","Couldn't change folder",err.message); }
     };
-    const maxSel=dlg.querySelector("[data-select='max_concurrent_downloads']");
-    if(maxSel) maxSel.onchange=async()=>{
-      try{ settingsCache=await patch("/api/settings",{max_concurrent_downloads:+maxSel.value}); toast("ok","Setting saved"); render(); }
-      catch(err){ toast("err","Couldn't save setting",err.message); }
-    };
+    const maxInput=dlg.querySelector("[data-input='max_concurrent_downloads']");
+    const maxSave=dlg.querySelector("#setMaxSave");
+    if(maxInput && maxSave){
+      maxInput.addEventListener("keydown",e=>{ if(e.key==="Enter") maxSave.click(); });
+      maxSave.onclick=async()=>{
+        const val=Math.max(1,Math.min(50,Math.round(+maxInput.value)));
+        maxInput.value=val;
+        try{ settingsCache=await patch("/api/settings",{max_concurrent_downloads:val}); toast("ok","Saved — "+val+" download"+(val!==1?"s":"")+" at once"); render(); }
+        catch(err){ toast("err","Couldn't save setting",err.message); }
+      };
+    }
     const clearBtn=dlg.querySelector("#setClearCompleted");
     if(clearBtn) clearBtn.onclick=async()=>{
       try{ const r=await post("/api/downloads/clear-completed"); toast("ok","Cleared "+r.removed+" completed downloads"); }
@@ -1064,7 +1168,7 @@ function connectWS(){
   ws.onmessage=e=>{
     const msg=JSON.parse(e.data);
     if(msg.type==="added"||msg.type==="updated"){ upsert(msg.download); render(); }
-    else if(msg.type==="removed"){ downloads=downloads.filter(d=>d.id!==msg.id); if(ui.activeId===msg.id) ui.activeId=null; render(); }
+    else if(msg.type==="removed"){ downloads=downloads.filter(d=>d.id!==msg.id); ui.selected.delete(msg.id); if(ui.activeId===msg.id) ui.activeId=null; render(); }
   };
   ws.onclose=()=>{ ui.wsConnected=false; renderStats(); setTimeout(connectWS, wsRetryMs); wsRetryMs=Math.min(wsRetryMs*1.6,10000); };
   ws.onerror=()=>{ ws.close(); };

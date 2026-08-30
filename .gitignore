@@ -5,3 +5,5 @@ downloads.db
 *.part
 .DS_Store
 dist/
+
+.claude/

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
@@ -20,6 +20,11 @@ class WebMainWindow(QMainWindow):
         super().__init__()
         self.manager = manager
 
+        # Frameless so the macOS native titlebar disappears — the HTML
+        # .titlebar (driven by -webkit-app-region: drag) becomes the only
+        # title bar, and it carries content (traffic-light decoration, total
+        # speed, theme toggle) that the macOS titlebar can't.
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setWindowTitle("FlowDownload")
         self.resize(1180, 760)
 

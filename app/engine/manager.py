@@ -71,6 +71,7 @@ class DownloadManager(QObject):
                 self._log(task.id, "info", "Interrupted by app restart")
             if os.path.exists(task.part_path):
                 task.downloaded_bytes = os.path.getsize(task.part_path)
+            task.updated_at = time.time()
             self.storage.save(task)
             self.tasks[task.id] = task
         self._dispatch_queue()
@@ -110,6 +111,7 @@ class DownloadManager(QObject):
             task = self.tasks[task_id]
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
+            task.updated_at = time.time()
             self.storage.save(task)
             self.task_updated.emit(task_id)
             return
@@ -123,6 +125,18 @@ class DownloadManager(QObject):
         if worker is not None:
             worker.pause()
 
+    def resume_all(self) -> None:
+        """Resume all paused, queued, failed, and cancelled tasks."""
+        for task in self.tasks.values():
+            if task.status in (DownloadStatus.PAUSED, DownloadStatus.QUEUED,
+                               DownloadStatus.FAILED, DownloadStatus.CANCELLED):
+                task.status = DownloadStatus.QUEUED
+                task.error_message = ""
+                task.updated_at = time.time()
+                self.storage.save(task)
+                self.task_updated.emit(task.id)
+        self._dispatch_queue()
+
     def cancel(self, task_id: str) -> None:
         worker = self._workers.get(task_id)
         if worker is not None:
@@ -131,6 +145,7 @@ class DownloadManager(QObject):
             task = self.tasks.get(task_id)
             if task is not None:
                 task.status = DownloadStatus.CANCELLED
+                task.updated_at = time.time()
                 self.storage.save(task)
                 self.task_updated.emit(task_id)
 
@@ -178,6 +193,7 @@ class DownloadManager(QObject):
         task = self.tasks[task_id]
         task.status = DownloadStatus.DOWNLOADING
         task.error_message = ""
+        task.updated_at = time.time()
         self.storage.save(task)
         if task.downloaded_bytes > 0:
             self._log(task_id, "info", f"Resuming from byte {task.downloaded_bytes:,}")
@@ -197,7 +213,9 @@ class DownloadManager(QObject):
         worker.start()
 
     def _on_worker_finished(self, task_id: str) -> None:
-        self._workers.pop(task_id, None)
+        worker = self._workers.pop(task_id, None)
+        if worker is not None:
+            worker.deleteLater()
         self._dispatch_queue()
 
     def _on_progress(self, task_id: str, downloaded: int, total: int, speed: float) -> None:
@@ -207,6 +225,7 @@ class DownloadManager(QObject):
         task.downloaded_bytes = downloaded
         task.total_bytes = total
         task.speed_bps = speed
+        task.updated_at = time.time()
         self.storage.save(task)
         self.task_updated.emit(task_id)
 
@@ -217,6 +236,7 @@ class DownloadManager(QObject):
         task.total_bytes = total_bytes
         task.etag = etag
         task.last_modified = last_modified
+        task.updated_at = time.time()
         self.storage.save(task)
         if etag or last_modified:
             self._log(task_id, "ok", "Server accepts byte ranges — resumable")
@@ -240,6 +260,7 @@ class DownloadManager(QObject):
         task.status = status
         task.error_message = error_message
         task.speed_bps = 0.0
+        task.updated_at = time.time()
         self.storage.save(task)
         level = self._STATUS_LOG_LEVEL.get(status)
         if level is not None:

@@ -9,11 +9,16 @@
     "nativeMessaging",
     "notifications",
     "downloads",
-    "cookies"
+    "cookies",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FlowDownload"
+  },
   "background": {
     "service_worker": "background.js"
   },

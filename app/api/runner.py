@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import threading
 import time
@@ -14,6 +15,7 @@ from app.api.server import create_app
 from app.engine.manager import DownloadManager
 
 API_PORT = 8756
+APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".flowdownload")
 
 
 class ApiServer:
@@ -39,7 +41,7 @@ class ApiServer:
 
         self._loop = asyncio.new_event_loop()
         self.broadcaster = EventBroadcaster(self._loop)
-        app = create_app(manager, self.executor, self.broadcaster, settings_path, self.token)
+        app = create_app(manager, self.executor, self.broadcaster, settings_path, self.token, APP_DATA_DIR)
         config = uvicorn.Config(app, host="127.0.0.1", port=self.port, loop="none", log_level="warning")
         self._server = uvicorn.Server(config)
 

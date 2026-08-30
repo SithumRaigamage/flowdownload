@@ -41,13 +41,18 @@ class TrayController:
         self.icon = QSystemTrayIcon(make_app_icon(), window)
         self.icon.setToolTip("FlowDownload")
 
-        menu = QMenu()
-        show_action = menu.addAction("Show FlowDownload")
+        # Must be stored as self.menu so Python's reference count keeps the
+        # underlying QMenu alive for the lifetime of this TrayController.
+        # Without this, the menu is a local that goes out of scope when
+        # __init__ returns, leaving the QSystemTrayIcon with a dangling pointer
+        # to a freed QMenu -- causing a SIGSEGV in QAction destructor on quit.
+        self.menu = QMenu()
+        show_action = self.menu.addAction("Show FlowDownload")
         show_action.triggered.connect(self._show_window)
-        menu.addSeparator()
-        quit_action = menu.addAction("Quit")
+        self.menu.addSeparator()
+        quit_action = self.menu.addAction("Quit")
         quit_action.triggered.connect(QApplication.instance().quit)
-        self.icon.setContextMenu(menu)
+        self.icon.setContextMenu(self.menu)
 
         self.icon.activated.connect(self._on_activated)
         self.icon.show()
