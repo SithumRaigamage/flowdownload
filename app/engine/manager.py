@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import os
+import time
+
+import requests
+from PySide6.QtCore import QObject, QTimer, Signal
+
+from app.engine.downloader import DownloadWorker
+from app.engine.models import DownloadStatus, DownloadTask
+from app.engine.paths import dedupe_path
+from app.engine.settings import Settings
+from app.engine.storage import Storage
+
+ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
+EXTERNAL_POLL_INTERVAL_MS = 2000
+HISTORY_LIMIT = 50  # per task; in-memory only, so a restart clears it -- fine for a debugging log
+
+
+class DownloadManager(QObject):
+    task_added = Signal(str)
+    task_updated = Signal(str)
+    task_removed = Signal(str)
+    task_finished = Signal(str, str)  # task_id, status_value ("completed" or "failed")
+
+    def __init__(self, storage: Storage, settings: Settings, parent=None):
+        super().__init__(parent)
+        self.storage = storage
+        self.settings = settings
+        self.tasks: dict[str, DownloadTask] = {}
+        self._workers: dict[str, DownloadWorker] = {}
+        # Per-task event log for the UI's detail view -- in-memory only
+        # (not persisted), since it's a debugging aid, not state the app
+        # needs to survive a restart.
+        self.history: dict[str, list[dict]] = {}
+        self._session = requests.Session()
+        # Some servers block or alter behavior for the default
+        # "python-requests/X" UA; a realistic browser UA avoids that.
+        self._session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        })
+        self._load_existing()
+
+        # Picks up rows inserted by another process while we're running --
+        # currently only the Chrome native messaging host does this, adding
+        # a queued download without going through this DownloadManager.
+        self._external_poll_timer = QTimer(self)
+        self._external_poll_timer.timeout.connect(self._poll_external_changes)
+        self._external_poll_timer.start(EXTERNAL_POLL_INTERVAL_MS)
+
+    def _poll_external_changes(self) -> None:
+        for task in self.storage.load_all():
+            if task.id not in self.tasks:
+                self.tasks[task.id] = task
+                self.task_added.emit(task.id)
+        self._dispatch_queue()
+
+    def _load_existing(self) -> None:
+        for task in self.storage.load_all():
+            # Anything mid-flight when the app last closed is not actually
+            # running anymore; reflect that, and re-sync progress from the
+            # .part file on disk since that's the real source of truth.
+            # Tasks that were only QUEUED (never got a worker slot) stay
+            # queued -- they'll be picked up by _dispatch_queue() below,
+            # same as if they'd just been added.
+            if task.status in ACTIVE_STATUSES:
+                task.status = DownloadStatus.PAUSED
+                self._log(task.id, "info", "Interrupted by app restart")
+            if os.path.exists(task.part_path):
+                task.downloaded_bytes = os.path.getsize(task.part_path)
+            self.storage.save(task)
+            self.tasks[task.id] = task
+        self._dispatch_queue()
+
+    def _log(self, task_id: str, level: str, message: str) -> None:
+        entries = self.history.setdefault(task_id, [])
+        entries.append({"time": time.time(), "level": level, "message": message})
+        del entries[:-HISTORY_LIMIT]
+
+    def get_history(self, task_id: str) -> list[dict]:
+        return list(self.history.get(task_id, []))
+
+    def add_download(self, url: str, dest_path: str) -> str:
+        # Read from storage rather than self.tasks: a download the Chrome
+        # extension just queued via the native host lands in storage
+        # immediately but isn't polled into self.tasks for up to
+        # EXTERNAL_POLL_INTERVAL_MS, so self.tasks alone could still miss it.
+        reserved = {t.dest_path for t in self.storage.load_all()}
+        dest_path = dedupe_path(dest_path, reserved)
+        task = DownloadTask(
+            url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
+            status=DownloadStatus.QUEUED,
+        )
+        self.tasks[task.id] = task
+        self.storage.save(task)
+        self._log(task.id, "info", "Added to queue")
+        self.task_added.emit(task.id)
+        self._dispatch_queue()
+        return task.id
+
+    def start(self, task_id: str) -> None:
+        """User explicitly wants this task running now (Resume / Retry click)."""
+        existing = self._workers.get(task_id)
+        if existing is not None and existing.isRunning():
+            return
+        if self._active_count() >= self.settings.max_concurrent_downloads:
+            task = self.tasks[task_id]
+            task.status = DownloadStatus.QUEUED
+            task.error_message = ""
+            self.storage.save(task)
+            self.task_updated.emit(task_id)
+            return
+        self._spawn(task_id)
+
+    def retry(self, task_id: str) -> None:
+        self.start(task_id)
+
+    def pause(self, task_id: str) -> None:
+        worker = self._workers.get(task_id)
+        if worker is not None:
+            worker.pause()
+
+    def cancel(self, task_id: str) -> None:
+        worker = self._workers.get(task_id)
+        if worker is not None:
+            worker.cancel()
+        else:
+            task = self.tasks.get(task_id)
+            if task is not None:
+                task.status = DownloadStatus.CANCELLED
+                self.storage.save(task)
+                self.task_updated.emit(task_id)
+
+    def remove(self, task_id: str) -> None:
+        worker = self._workers.get(task_id)
+        if worker is not None:
+            worker.cancel()
+            worker.wait(2000)
+
+        task = self.tasks.pop(task_id, None)
+        if task is not None and os.path.exists(task.part_path):
+            os.remove(task.part_path)
+
+        self.storage.delete(task_id)
+        self.history.pop(task_id, None)
+        self.task_removed.emit(task_id)
+
+    def apply_settings(self, settings: Settings) -> None:
+        self.settings = settings
+        self._dispatch_queue()
+
+    def shutdown(self) -> None:
+        """Pause (not cancel) every running download so .part files survive
+        and can resume on next launch, then wait for threads to exit cleanly."""
+        for worker in list(self._workers.values()):
+            worker.pause()
+        for worker in list(self._workers.values()):
+            worker.wait(5000)
+
+    def _active_count(self) -> int:
+        return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
+
+    def _dispatch_queue(self) -> None:
+        free_slots = self.settings.max_concurrent_downloads - self._active_count()
+        if free_slots <= 0:
+            return
+        queued = sorted(
+            (t for t in self.tasks.values() if t.status == DownloadStatus.QUEUED),
+            key=lambda t: t.created_at,
+        )
+        for task in queued[:free_slots]:
+            self._spawn(task.id)
+
+    def _spawn(self, task_id: str) -> None:
+        task = self.tasks[task_id]
+        task.status = DownloadStatus.DOWNLOADING
+        task.error_message = ""
+        self.storage.save(task)
+        if task.downloaded_bytes > 0:
+            self._log(task_id, "info", f"Resuming from byte {task.downloaded_bytes:,}")
+        else:
+            self._log(task_id, "info", "Connecting")
+        self.task_updated.emit(task_id)
+
+        worker = DownloadWorker(
+            task.id, task.url, task.dest_path, task.etag, task.last_modified,
+            task.cookie_header, self._session,
+        )
+        worker.progress.connect(self._on_progress)
+        worker.status_changed.connect(self._on_status_changed)
+        worker.metadata_resolved.connect(self._on_metadata_resolved)
+        worker.finished.connect(lambda tid=task_id: self._on_worker_finished(tid))
+        self._workers[task_id] = worker
+        worker.start()
+
+    def _on_worker_finished(self, task_id: str) -> None:
+        self._workers.pop(task_id, None)
+        self._dispatch_queue()
+
+    def _on_progress(self, task_id: str, downloaded: int, total: int, speed: float) -> None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        task.downloaded_bytes = downloaded
+        task.total_bytes = total
+        task.speed_bps = speed
+        self.storage.save(task)
+        self.task_updated.emit(task_id)
+
+    def _on_metadata_resolved(self, task_id: str, total_bytes: int, etag: str, last_modified: str) -> None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        task.total_bytes = total_bytes
+        task.etag = etag
+        task.last_modified = last_modified
+        self.storage.save(task)
+        if etag or last_modified:
+            self._log(task_id, "ok", "Server accepts byte ranges — resumable")
+        else:
+            self._log(task_id, "warn", "No ETag/Last-Modified from server — resume not guaranteed")
+        self.task_updated.emit(task_id)
+
+    _STATUS_LOG_LEVEL = {
+        DownloadStatus.RETRYING: "warn",
+        DownloadStatus.FAILED: "error",
+        DownloadStatus.COMPLETED: "ok",
+        DownloadStatus.PAUSED: "info",
+        DownloadStatus.CANCELLED: "info",
+    }
+
+    def _on_status_changed(self, task_id: str, status_value: str, error_message: str) -> None:
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        status = DownloadStatus(status_value)
+        task.status = status
+        task.error_message = error_message
+        task.speed_bps = 0.0
+        self.storage.save(task)
+        level = self._STATUS_LOG_LEVEL.get(status)
+        if level is not None:
+            message = error_message or {
+                DownloadStatus.COMPLETED: "Finished",
+                DownloadStatus.PAUSED: "Paused",
+                DownloadStatus.CANCELLED: "Cancelled",
+            }.get(status, status.value)
+            self._log(task_id, level, message)
+        self.task_updated.emit(task_id)
+        if task.status in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
+            self.task_finished.emit(task_id, status_value)

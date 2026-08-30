@@ -1,0 +1,98 @@
+# Roadmap / known gaps
+
+Everything below is **not built yet**. None of it was asked for — this is a
+backlog of things that came up as known edges while building the app, kept
+here so they don't have to be rediscovered later. Each entry has enough
+context to pick up cold.
+
+## Platform support
+
+### macOS only
+Every OS touchpoint is Mac-specific:
+- `app/main.py`, `native_host/flowdownload_host.py` — app data dir
+  (`~/.flowdownload/`) is fine cross-platform, but...
+- `scripts/setup_chrome_integration.py` — registers the native messaging
+  host at `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`,
+  a macOS-only path (Windows uses a registry key; Linux uses
+  `~/.config/google-chrome/NativeMessagingHosts/`)
+- `dist/FlowDownload.app` — the whole `.app` bundle structure
+  (`Info.plist`, `Contents/MacOS/...`) is macOS-only; Windows would need an
+  `.exe` + `.ico` (e.g. via PyInstaller), Linux a `.desktop` file
+- `app/ui/tray.py` — `QSystemTrayIcon` itself is cross-platform (Qt), so
+  this one mostly just works elsewhere already
+
+To port: keep the engine layer (`app/engine/`) as-is — it's plain Python,
+no macOS dependencies — and add a platform-specific packaging + native-host
+registration path per OS.
+
+### Only Google Chrome (stable channel)
+`scripts/setup_chrome_integration.py` registers the native host for the
+default Chrome install only. Brave, Edge, Chrome Beta/Canary, and other
+Chromium-based browsers each read their *own* native messaging hosts
+directory (usually named after the browser but same JSON format) and would
+each need the same manifest copied there, plus their own "load unpacked
+extension" step.
+
+## Distribution
+
+### No code signing / notarization
+The `.app` isn't signed with an Apple Developer ID. Fine for local use on
+this machine (no Gatekeeper quarantine flag gets attached), but sharing it
+with anyone else — or moving it via a method that adds
+`com.apple.quarantine` (e.g. downloading it from a link) — would trigger
+Gatekeeper's "unidentified developer" block. Signing requires an Apple
+Developer Program membership; notarization is a further `xcrun notarytool`
+step after that.
+
+### Extension is Developer Mode / unpacked only
+Not published to the Chrome Web Store. Works fine long-term for personal
+use, but: it only exists on this machine, Chrome may occasionally show a
+"Disable developer mode extensions" style nag depending on Chrome's current
+policy, and there's no auto-update mechanism for it — changes require
+reloading it manually from `chrome://extensions`.
+
+### No auto-update for the app itself
+New builds require manually re-copying `dist/FlowDownload.app` to
+`/Applications`. A real updater would mean either a signed-and-notarized
+build (Sparkle-style update feed) or something much simpler like a
+version-check-and-prompt-to-redownload flow.
+
+## App features
+
+### No bandwidth throttling
+`app/engine/downloader.py` streams as fast as the connection allows — no
+setting to cap a download's (or the app's aggregate) speed. Would live
+as a `max_bandwidth_bps` in `Settings`, enforced with a token-bucket sleep
+in `DownloadWorker._stream_to_file`'s chunk loop.
+
+### No checksum verification against a server-provided hash
+`_finalize()` in `downloader.py` only checks that the final file size
+matches `Content-Length` / the `Range` total — not a cryptographic hash.
+Most servers don't expose one, but some do via a `Digest` header or a
+sidecar `.sha256` file convention; worth adding as a best-effort check
+when present, not required.
+
+### No drag-and-drop URL input
+`NewDownloadDialog` requires pasting a URL into the text field. Dragging a
+link from a browser tab or a text selection onto the window isn't wired up
+(`QWidget.setAcceptDrops` + `dragEnterEvent`/`dropEvent` on `MainWindow`).
+
+### No import of existing Chrome download history
+The extension only sees downloads that start *after* it's loaded — nothing
+retroactively pulls in what's already in `chrome://downloads`.
+
+## Testing
+
+### No automated test suite checked into the repo
+Everything described as "verified" throughout development (resume/hash
+integrity, flaky-connection retry, crash-restart persistence, concurrency
+limits, the 416/If-Range correctness fixes, cookie forwarding, the native
+messaging round-trip) was checked with one-off scripts run during that
+session, not committed anywhere — so there's currently nothing in this
+repo you can re-run to catch a regression after future changes.
+
+Worth turning into a real `pytest` suite under a `tests/` directory,
+reusing the same approach (a tiny local `http.server`-based fixture
+serving a throttled, Range-aware file) rather than hitting real external
+servers. The individual test scenarios from that session are the natural
+starting point for what the suite should cover.

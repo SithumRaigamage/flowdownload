@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en" class="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlowDownload</title>
+<style>
+/* ============================================================
+   THEME TOKENS — shadcn/ui variable names.
+   Replace this whole block with the :root/.dark output from
+   tweakcn "claude blu 2" (Code button) and everything retints.
+   ============================================================ */
+:root{
+  --background: oklch(0.985 0.004 250);
+  --foreground: oklch(0.26 0.021 258);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.26 0.021 258);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.26 0.021 258);
+  --primary: oklch(0.55 0.132 252);
+  --primary-foreground: oklch(0.99 0.005 250);
+  --secondary: oklch(0.962 0.009 252);
+  --secondary-foreground: oklch(0.34 0.028 258);
+  --muted: oklch(0.966 0.007 252);
+  --muted-foreground: oklch(0.556 0.021 256);
+  --accent: oklch(0.945 0.021 252);
+  --accent-foreground: oklch(0.34 0.028 258);
+  --destructive: oklch(0.58 0.196 27);
+  --destructive-foreground: oklch(0.99 0.005 250);
+  --success: oklch(0.62 0.135 155);
+  --warning: oklch(0.72 0.145 68);
+  --border: oklch(0.918 0.011 254);
+  --input: oklch(0.918 0.011 254);
+  --ring: oklch(0.55 0.132 252);
+  --radius: 0.625rem;
+  --shadow-sm: 0 1px 2px 0 oklch(0.26 0.021 258 / 0.06);
+  --shadow-md: 0 4px 12px -2px oklch(0.26 0.021 258 / 0.10), 0 2px 4px -2px oklch(0.26 0.021 258 / 0.06);
+  --shadow-lg: 0 16px 40px -8px oklch(0.26 0.021 258 / 0.20), 0 4px 12px -4px oklch(0.26 0.021 258 / 0.10);
+}
+.dark{
+  --background: oklch(0.196 0.014 258);
+  --foreground: oklch(0.945 0.007 250);
+  --card: oklch(0.232 0.016 258);
+  --card-foreground: oklch(0.945 0.007 250);
+  --popover: oklch(0.245 0.017 258);
+  --popover-foreground: oklch(0.945 0.007 250);
+  --primary: oklch(0.685 0.128 250);
+  --primary-foreground: oklch(0.18 0.016 258);
+  --secondary: oklch(0.276 0.018 258);
+  --secondary-foreground: oklch(0.92 0.008 250);
+  --muted: oklch(0.276 0.018 258);
+  --muted-foreground: oklch(0.68 0.017 254);
+  --accent: oklch(0.312 0.024 256);
+  --accent-foreground: oklch(0.945 0.007 250);
+  --destructive: oklch(0.63 0.185 27);
+  --destructive-foreground: oklch(0.98 0.005 250);
+  --success: oklch(0.68 0.13 155);
+  --warning: oklch(0.77 0.14 68);
+  --border: oklch(0.318 0.02 258);
+  --input: oklch(0.318 0.02 258);
+  --ring: oklch(0.685 0.128 250);
+  --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.30);
+  --shadow-md: 0 4px 12px -2px oklch(0 0 0 / 0.40), 0 2px 4px -2px oklch(0 0 0 / 0.30);
+  --shadow-lg: 0 16px 40px -8px oklch(0 0 0 / 0.55), 0 4px 12px -4px oklch(0 0 0 / 0.40);
+}
+
+/* ---------- base ---------- */
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--background);
+  color:var(--foreground);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+.mono{font-family:"SF Mono",ui-monospace,"JetBrains Mono","Menlo",monospace;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--muted-foreground);border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- primitives ---------- */
+.btn{
+  display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;
+  border-radius:calc(var(--radius) - 2px);border:1px solid transparent;
+  font-size:12.5px;font-weight:500;white-space:nowrap;
+  transition:background .13s,border-color .13s,color .13s,opacity .13s;
+}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover:not(:disabled){filter:brightness(1.07)}
+.btn-outline{border-color:var(--border);background:var(--card)}
+.btn-outline:hover:not(:disabled){background:var(--accent)}
+.btn-ghost:hover:not(:disabled){background:var(--accent)}
+.btn-destructive{background:var(--destructive);color:var(--destructive-foreground)}
+.btn-destructive:hover:not(:disabled){filter:brightness(1.07)}
+.btn-icon{width:30px;padding:0;justify-content:center}
+.btn-sm{height:26px;padding:0 9px;font-size:12px}
+
+.badge{
+  display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 7px;
+  border-radius:99px;font-size:11px;font-weight:600;letter-spacing:.01em;
+  border:1px solid transparent;
+}
+.badge-downloading{background:color-mix(in oklab,var(--primary) 14%,transparent);color:var(--primary);border-color:color-mix(in oklab,var(--primary) 26%,transparent)}
+.badge-queued{background:var(--muted);color:var(--muted-foreground);border-color:var(--border)}
+.badge-paused{background:var(--muted);color:var(--muted-foreground);border-color:var(--border)}
+.badge-cancelled{background:var(--muted);color:var(--muted-foreground);border-color:var(--border)}
+.badge-retrying{background:color-mix(in oklab,var(--warning) 16%,transparent);color:var(--warning);border-color:color-mix(in oklab,var(--warning) 30%,transparent)}
+.badge-completed{background:color-mix(in oklab,var(--success) 14%,transparent);color:var(--success);border-color:color-mix(in oklab,var(--success) 28%,transparent)}
+.badge-failed{background:color-mix(in oklab,var(--destructive) 13%,transparent);color:var(--destructive);border-color:color-mix(in oklab,var(--destructive) 28%,transparent)}
+
+.input{
+  height:30px;width:100%;padding:0 10px;border-radius:calc(var(--radius) - 2px);
+  border:1px solid var(--input);background:var(--card);font-size:12.5px;
+  transition:border-color .13s,box-shadow .13s;
+}
+.input:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 18%,transparent)}
+.input::placeholder{color:var(--muted-foreground)}
+.input[readonly]{color:var(--muted-foreground);cursor:default}
+select.input{cursor:pointer;appearance:none;padding-right:26px;
+  background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);
+  background-position:calc(100% - 13px) 13px,calc(100% - 9px) 13px;background-size:4px 4px;background-repeat:no-repeat}
+.label{display:block;font-size:11.5px;font-weight:600;color:var(--muted-foreground);margin-bottom:5px;letter-spacing:.01em}
+
+.switch{position:relative;width:34px;height:19px;border-radius:99px;background:var(--input);transition:background .16s;flex:none;cursor:pointer}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:99px;background:var(--card);box-shadow:var(--shadow-sm);transition:transform .16s}
+.switch[aria-checked="true"]{background:var(--primary)}
+.switch[aria-checked="true"]::after{transform:translateX(15px)}
+
+.checkbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--input);background:var(--card);flex:none;display:grid;place-items:center;transition:background .12s,border-color .12s}
+.checkbox[aria-checked="true"]{background:var(--primary);border-color:var(--primary)}
+.checkbox[aria-checked="true"]::after{content:"";width:8px;height:5px;border:1.8px solid var(--primary-foreground);border-top:0;border-right:0;transform:rotate(-45deg) translateY(-1px)}
+
+.kbd{display:inline-block;min-width:17px;padding:1px 5px;border-radius:4px;border:1px solid var(--border);
+  background:var(--muted);font-size:10.5px;font-family:"SF Mono",ui-monospace,monospace;color:var(--muted-foreground);text-align:center}
+
+/* ---------- shell ---------- */
+.app{display:flex;flex-direction:column;height:100vh}
+
+.titlebar{
+  display:flex;align-items:center;gap:12px;height:38px;padding:0 12px;flex:none;
+  background:var(--card);border-bottom:1px solid var(--border);-webkit-user-select:none;user-select:none;
+}
+.lights{display:flex;gap:7px;padding-right:4px}
+.light{width:11px;height:11px;border-radius:99px}
+.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
+.titlebar h1{margin:0;font-size:12.5px;font-weight:650;letter-spacing:-.005em}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.throughput{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted-foreground)}
+.throughput b{color:var(--foreground);font-weight:600}
+.netdot{width:6px;height:6px;border-radius:99px;background:var(--success);flex:none}
+.netdot.off{background:var(--destructive)}
+
+.body{display:flex;flex:1;min-height:0}
+
+/* ---------- sidebar ---------- */
+.sidebar{
+  width:216px;flex:none;display:flex;flex-direction:column;gap:2px;padding:10px 8px;
+  border-right:1px solid var(--border);background:color-mix(in oklab,var(--card) 55%,var(--background));
+  overflow-y:auto;
+}
+.side-label{font-size:10.5px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted-foreground);padding:10px 8px 5px}
+.nav{display:flex;align-items:center;gap:9px;height:29px;padding:0 8px;border-radius:calc(var(--radius) - 2px);
+  font-size:12.5px;font-weight:500;color:var(--secondary-foreground);width:100%;text-align:left;transition:background .12s,color .12s}
+.nav:hover{background:var(--accent)}
+.nav[aria-current="true"]{background:var(--accent);color:var(--accent-foreground);font-weight:600}
+.nav .dot{width:7px;height:7px;border-radius:99px;flex:none}
+.nav .count{margin-left:auto;font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.nav[aria-current="true"] .count{color:var(--accent-foreground)}
+
+.side-card{margin:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+.side-card .row{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:7px}
+.side-card .row span{color:var(--muted-foreground)}
+.diskbar{height:5px;border-radius:99px;background:var(--muted);overflow:hidden}
+.diskbar i{display:block;height:100%;background:var(--primary);border-radius:99px}
+.side-foot{margin-top:auto;padding:8px}
+
+/* ---------- toolbar ---------- */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex:none;background:var(--background)}
+.search{position:relative;flex:1;max-width:300px}
+.search .input{padding-left:29px}
+.search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--muted-foreground);pointer-events:none}
+.tb-sep{width:1px;height:19px;background:var(--border);margin:0 2px}
+
+.bulkbar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:color-mix(in oklab,var(--primary) 9%,var(--background));
+  border-bottom:1px solid var(--border);font-size:12.5px;flex:none}
+.bulkbar b{font-weight:600}
+
+/* ---------- list ---------- */
+.list{flex:1;overflow-y:auto;padding:6px}
+.row{
+  display:grid;grid-template-columns:auto auto 1fr auto;gap:11px;align-items:center;
+  padding:9px 10px;border-radius:var(--radius);border:1px solid transparent;
+  transition:background .12s,border-color .12s;cursor:default;position:relative;
+}
+.row:hover{background:var(--card);border-color:var(--border)}
+.row[data-selected="true"]{background:color-mix(in oklab,var(--primary) 8%,var(--card));border-color:color-mix(in oklab,var(--primary) 32%,transparent)}
+.row[data-active="true"]{box-shadow:inset 2px 0 0 var(--primary)}
+.row .cb{opacity:0;transition:opacity .12s}
+.row:hover .cb,.row[data-selected="true"] .cb,.list[data-anyselected="true"] .cb{opacity:1}
+
+.ficon{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;flex:none;
+  font-size:9.5px;font-weight:700;letter-spacing:.02em;
+  background:var(--muted);color:var(--muted-foreground);border:1px solid var(--border)}
+.ficon[data-kind="video"]{background:color-mix(in oklab,var(--primary) 13%,transparent);color:var(--primary);border-color:transparent}
+.ficon[data-kind="archive"]{background:color-mix(in oklab,var(--warning) 15%,transparent);color:var(--warning);border-color:transparent}
+.ficon[data-kind="image"]{background:color-mix(in oklab,var(--success) 14%,transparent);color:var(--success);border-color:transparent}
+
+.rmain{min-width:0}
+.rtop{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.fname{font-size:12.5px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fhost{font-size:11px;color:var(--muted-foreground);white-space:nowrap;flex:none}
+.rbot{display:flex;align-items:center;gap:9px;margin-top:5px;font-size:11px;color:var(--muted-foreground)}
+.rbot .sep{opacity:.4}
+.rerr{font-size:11px;color:var(--destructive);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.segbar{position:relative;height:6px;border-radius:99px;background:var(--muted);overflow:hidden}
+.segbar i{position:absolute;top:0;left:0;height:100%;background:var(--primary);transition:width .28s linear}
+.segbar[data-state="completed"] i{background:var(--success)}
+.segbar[data-state="failed"] i{background:color-mix(in oklab,var(--destructive) 55%,var(--muted))}
+.segbar[data-state="paused"] i,.segbar[data-state="queued"] i,.segbar[data-state="cancelled"] i{background:var(--muted-foreground);opacity:.55}
+.segbar[data-state="retrying"] i{background:var(--warning)}
+.segbar[data-state="retrying"]::after{
+  content:"";position:absolute;inset:0;border-radius:99px;
+  background:linear-gradient(90deg,transparent,color-mix(in oklab,var(--warning) 45%,transparent),transparent);
+  animation:sweep 1.15s linear infinite}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+
+.ractions{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
+.row:hover .ractions,.row[data-active="true"] .ractions{opacity:1}
+.rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:88px}
+.rspeed{font-size:11.5px;font-weight:600}
+.reta{font-size:10.5px;color:var(--muted-foreground)}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;height:100%;text-align:center;padding:40px}
+.empty h3{margin:0;font-size:14px;font-weight:600}
+.empty p{margin:0;font-size:12.5px;color:var(--muted-foreground);max-width:280px}
+.empty .ring{width:46px;height:46px;border-radius:99px;border:1.5px dashed var(--border);display:grid;place-items:center;color:var(--muted-foreground)}
+
+/* ---------- detail sheet ---------- */
+.sheet{
+  width:352px;flex:none;border-left:1px solid var(--border);background:var(--card);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.sheet-head{padding:12px 14px;border-bottom:1px solid var(--border)}
+.sheet-head .t{display:flex;align-items:flex-start;gap:9px}
+.sheet-head h2{margin:0;font-size:13px;font-weight:650;word-break:break-all;line-height:1.35}
+.tabs{display:flex;gap:1px;padding:6px 8px 0;border-bottom:1px solid var(--border);flex:none}
+.tab{padding:6px 9px;font-size:11.5px;font-weight:550;color:var(--muted-foreground);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .12s,border-color .12s}
+.tab:hover{color:var(--foreground)}
+.tab[aria-selected="true"]{color:var(--primary);border-bottom-color:var(--primary)}
+.sheet-body{flex:1;overflow-y:auto;padding:13px 14px}
+.kv{display:grid;grid-template-columns:104px 1fr;gap:5px 10px;font-size:11.5px;align-items:baseline}
+.kv dt{color:var(--muted-foreground)}
+.kv dd{margin:0;word-break:break-all}
+.hr{height:1px;background:var(--border);margin:13px 0}
+.sect{font-size:10.5px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted-foreground);margin-bottom:8px}
+
+.timeline{position:relative;height:26px;border-radius:6px;background:var(--muted);overflow:hidden;margin-bottom:7px}
+.timeline i{position:absolute;top:0;height:100%}
+.timeline i[data-t="ok"]{background:color-mix(in oklab,var(--primary) 62%,transparent)}
+.timeline i[data-t="stall"]{background:color-mix(in oklab,var(--destructive) 46%,transparent)}
+.timeline i[data-t="wait"]{background:repeating-linear-gradient(45deg,color-mix(in oklab,var(--warning) 40%,transparent) 0 4px,transparent 4px 8px)}
+.tl-legend{display:flex;gap:12px;font-size:10.5px;color:var(--muted-foreground)}
+.tl-legend span{display:flex;align-items:center;gap:5px}
+.tl-legend b{width:8px;height:8px;border-radius:2px;display:block}
+
+.log{display:flex;flex-direction:column;gap:0}
+.log-item{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);font-size:11.5px}
+.log-item:last-child{border-bottom:0}
+.log-time{color:var(--muted-foreground);font-size:10.5px;padding-top:1px}
+.log-item[data-lv="error"] .log-msg{color:var(--destructive)}
+.log-item[data-lv="warn"] .log-msg{color:var(--warning)}
+.log-item[data-lv="ok"] .log-msg{color:var(--success)}
+
+.hdr-block{background:var(--muted);border-radius:8px;padding:9px 10px;font-size:10.5px;line-height:1.65;word-break:break-all;margin-bottom:9px}
+.hdr-block .k{color:var(--primary);font-weight:600}
+
+/* ---------- overlays ---------- */
+.scrim{position:fixed;inset:0;background:oklch(0 0 0 / .40);display:grid;place-items:center;z-index:50;padding:20px;
+  animation:fade .14s ease-out}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.dialog{width:100%;max-width:480px;max-height:calc(100vh - 60px);display:flex;flex-direction:column;
+  background:var(--popover);color:var(--popover-foreground);border:1px solid var(--border);
+  border-radius:calc(var(--radius) + 4px);box-shadow:var(--shadow-lg);overflow:hidden;
+  animation:pop .16s cubic-bezier(.2,.9,.3,1)}
+@keyframes pop{from{opacity:0;transform:scale(.97) translateY(6px)}to{opacity:1;transform:none}}
+.dialog-head{padding:15px 17px 11px}
+.dialog-head h2{margin:0 0 3px;font-size:14px;font-weight:650}
+.dialog-head p{margin:0;font-size:12px;color:var(--muted-foreground)}
+.dialog-body{padding:0 17px 15px;overflow-y:auto;flex:1}
+.dialog-foot{display:flex;justify-content:flex-end;gap:7px;padding:12px 17px;border-top:1px solid var(--border);background:color-mix(in oklab,var(--muted) 45%,transparent)}
+.field{margin-bottom:13px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.setrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.setrow:last-child{border-bottom:0}
+.setrow .txt{flex:1;min-width:0}
+.setrow .txt div{font-size:12.5px;font-weight:550}
+.setrow .txt p{margin:2px 0 0;font-size:11.5px;color:var(--muted-foreground);line-height:1.4}
+
+.menu{position:fixed;z-index:60;min-width:186px;padding:4px;background:var(--popover);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--shadow-lg);animation:pop .11s ease-out}
+.menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 8px;border-radius:6px;font-size:12.5px;text-align:left}
+.menu button:hover{background:var(--accent)}
+.menu button[data-danger="true"]{color:var(--destructive)}
+.menu button[data-danger="true"]:hover{background:color-mix(in oklab,var(--destructive) 12%,transparent)}
+.menu .msep{height:1px;background:var(--border);margin:4px 2px}
+
+.toasts{position:fixed;right:16px;bottom:16px;z-index:70;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.toast{display:flex;align-items:flex-start;gap:9px;min-width:250px;max-width:340px;padding:10px 12px;
+  background:var(--popover);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-lg);
+  animation:slidein .2s cubic-bezier(.2,.9,.3,1)}
+@keyframes slidein{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+.toast .tt{font-size:12.5px;font-weight:600}
+.toast .td{font-size:11.5px;color:var(--muted-foreground);margin-top:1px}
+.toast[data-kind="ok"] .ti{color:var(--success)}
+.toast[data-kind="warn"] .ti{color:var(--warning)}
+.toast[data-kind="err"] .ti{color:var(--destructive)}
+.toast[data-kind="info"] .ti{color:var(--primary)}
+
+.dropzone{position:fixed;inset:0;z-index:80;background:color-mix(in oklab,var(--primary) 16%,oklch(0 0 0 / .3));
+  display:grid;place-items:center;border:2px dashed var(--primary);pointer-events:none}
+.dropzone div{background:var(--popover);padding:16px 22px;border-radius:var(--radius);box-shadow:var(--shadow-lg);font-weight:600}
+
+.shortcuts{display:grid;grid-template-columns:1fr auto;gap:8px 20px;font-size:12.5px;align-items:center}
+.shortcuts .g{grid-column:1/-1;font-size:10.5px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted-foreground);margin-top:10px}
+.shortcuts .g:first-child{margin-top:0}
+
+.hidden{display:none !important}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important}
+}
+@media (max-width:1080px){ .sheet{position:absolute;right:0;top:38px;bottom:0;box-shadow:var(--shadow-lg);z-index:20} }
+@media (max-width:760px){ .sidebar{display:none} .sheet{width:100%} }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="titlebar">
+    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
+    <h1>FlowDownload</h1>
+    <div class="tb-right">
+      <div class="throughput"><b id="totalSpeed" class="mono">0 B/s</b></div>
+      <div class="tb-sep"></div>
+      <div class="throughput"><i class="netdot" id="netdot"></i><span id="netlabel">Connecting…</span></div>
+      <button class="btn btn-ghost btn-icon" id="themeBtn" title="Toggle appearance" aria-label="Toggle appearance">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="body">
+    <nav class="sidebar" id="sidebar">
+      <div class="side-label">Library</div>
+      <div id="filters"></div>
+
+      <div class="side-label">System</div>
+      <div class="side-card">
+        <div class="row"><span>Active slots</span><b id="slotsLabel" class="mono">0 / 0</b></div>
+        <div class="row" style="margin-bottom:4px"><span>Disk free</span><b id="diskLabel" class="mono">—</b></div>
+        <div class="diskbar"><i id="diskBar" style="width:0%"></i></div>
+      </div>
+
+      <div class="side-card">
+        <div class="row" style="margin-bottom:4px"><span>Chrome extension</span><span class="badge" id="chromeBadge">—</span></div>
+        <p id="chromeText" style="margin:0;font-size:11px;color:var(--muted-foreground);line-height:1.45"></p>
+      </div>
+
+      <div class="side-foot">
+        <button class="btn btn-ghost" style="width:100%;justify-content:flex-start" id="settingsBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+          Settings
+        </button>
+      </div>
+    </nav>
+
+    <div class="main">
+      <div class="toolbar">
+        <div class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input class="input" id="search" placeholder="Search downloads" aria-label="Search downloads">
+        </div>
+        <select class="input" id="sort" style="width:auto" aria-label="Sort by">
+          <option value="added">Newest first</option>
+          <option value="name">Name</option>
+          <option value="size">Largest</option>
+          <option value="speed">Fastest</option>
+          <option value="progress">Progress</option>
+        </select>
+        <div class="tb-sep"></div>
+        <button class="btn btn-outline" id="pauseAllBtn">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+          Pause all
+        </button>
+        <div style="margin-left:auto;display:flex;gap:7px">
+          <button class="btn btn-ghost btn-icon" id="helpBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+          </button>
+          <button class="btn btn-primary" id="addBtn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            Add download
+          </button>
+        </div>
+      </div>
+
+      <div class="bulkbar hidden" id="bulkbar">
+        <b id="bulkCount">0 selected</b>
+        <div class="tb-sep"></div>
+        <button class="btn btn-sm btn-ghost" data-bulk="resume">Resume</button>
+        <button class="btn btn-sm btn-ghost" data-bulk="pause">Pause</button>
+        <button class="btn btn-sm btn-ghost" data-bulk="retry">Retry</button>
+        <button class="btn btn-sm btn-ghost" data-bulk="remove" style="color:var(--destructive)">Remove</button>
+        <button class="btn btn-sm btn-ghost" style="margin-left:auto" data-bulk="clear">Clear selection</button>
+      </div>
+
+      <div class="list" id="list"></div>
+    </div>
+
+    <aside class="sheet hidden" id="sheet" aria-label="Download details"></aside>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div id="overlays"></div>
+<div class="dropzone hidden" id="dropzone"><div>Drop a link to download it</div></div>
+
+<script>
+"use strict";
+const TOKEN = "__FLOWDOWNLOAD_TOKEN__";
+const KB=1024, MB=KB*1024, GB=MB*1024;
+
+/* ---------- API ---------- */
+async function api(path, opts){
+  opts = opts || {};
+  const headers = Object.assign({"Authorization":"Bearer "+TOKEN}, opts.headers||{});
+  if(opts.body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, Object.assign({}, opts, {headers}));
+  if(!res.ok){
+    let detail = res.statusText;
+    try{ const j = await res.json(); if(j && j.detail) detail = j.detail; }catch(_){}
+    throw new Error(detail);
+  }
+  const ct = res.headers.get("content-type")||"";
+  return ct.includes("application/json") ? res.json() : null;
+}
+const getJSON = (path)=>api(path);
+const post = (path, body)=>api(path, {method:"POST", body: body!==undefined?JSON.stringify(body):undefined});
+const patch = (path, body)=>api(path, {method:"PATCH", body:JSON.stringify(body)});
+const del = (path)=>api(path, {method:"DELETE"});
+
+/* ---------- state ---------- */
+let downloads = [];
+let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false};
+let diskCache = null;
+let chromeCache = null;
+let sheetLog = {id:null, entries:[]};
+const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false};
+const history=new Array(40).fill(0);
+
+const kindOf = n => {
+  const e=(n.split(".").pop()||"").toLowerCase();
+  if(["mp4","mkv","mov","webm","avi"].includes(e)) return "video";
+  if(["zip","dmg","tar","gz","7z","pkg","iso"].includes(e)) return "archive";
+  if(["png","jpg","jpeg","gif","webp","svg","heic"].includes(e)) return "image";
+  return "file";
+};
+const extOf = n => (n.split(".").pop()||"?").toUpperCase().slice(0,4);
+function hostOf(url){ try{ return new URL(url).hostname; }catch(_){ return url; } }
+function guessFilename(url){ try{ const p=decodeURIComponent(new URL(url).pathname); return p.split("/").filter(Boolean).pop()||"download"; }catch(_){ return "download"; } }
+
+function normalize(t){
+  return {
+    id:t.id, name:t.filename || t.dest_path.split("/").pop(), host:hostOf(t.url), url:t.url, dest:t.dest_path,
+    size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
+    error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
+    hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
+  };
+}
+function upsert(raw){
+  const n=normalize(raw);
+  const i=downloads.findIndex(x=>x.id===n.id);
+  if(i>=0) downloads[i]=n; else downloads.unshift(n);
+}
+
+const FILTERS=[
+  {id:"all", label:"All downloads", color:null},
+  {id:"downloading", label:"Downloading", color:"var(--primary)"},
+  {id:"retrying", label:"Retrying", color:"var(--warning)"},
+  {id:"queued", label:"Queued", color:"var(--muted-foreground)"},
+  {id:"paused", label:"Paused", color:"var(--muted-foreground)"},
+  {id:"completed", label:"Completed", color:"var(--success)"},
+  {id:"failed", label:"Failed", color:"var(--destructive)"},
+  {id:"cancelled", label:"Cancelled", color:"var(--muted-foreground)"}
+];
+
+/* ---------- format helpers ---------- */
+const fmtBytes=b=>{ if(b<KB) return Math.round(b)+" B";
+  if(b<MB) return (b/KB).toFixed(0)+" KB";
+  if(b<GB) return (b/MB).toFixed(b<10*MB?1:0)+" MB";
+  return (b/GB).toFixed(2)+" GB"; };
+const fmtSpeed=b=>b<=0?"—":fmtBytes(b)+"/s";
+const fmtEta=s=>{ if(!isFinite(s)||s<=0) return "—";
+  if(s<60) return Math.round(s)+"s";
+  if(s<3600) return Math.floor(s/60)+"m "+Math.round(s%60)+"s";
+  return Math.floor(s/3600)+"h "+Math.round(s%3600/60)+"m"; };
+const fmtTime=epochSec=>{ const d=new Date(epochSec*1000); return d.toTimeString().slice(0,8); };
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct=d=>d.size?d.received/d.size:0;
+
+/* ---------- toasts ---------- */
+const ICONS={ok:'<path d="M20 6 9 17l-5-5"/>',warn:'<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',err:'<circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'};
+function toast(kind,title,desc){
+  const el=document.createElement("div");
+  el.className="toast"; el.dataset.kind=kind;
+  el.innerHTML='<svg class="ti" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="flex:none;margin-top:1px">'+ICONS[kind]+'</svg>'+
+    '<div><div class="tt">'+esc(title)+'</div>'+(desc?'<div class="td">'+esc(desc)+'</div>':'')+'</div>';
+  document.getElementById("toasts").appendChild(el);
+  setTimeout(()=>{el.style.transition="opacity .2s,transform .2s";el.style.opacity="0";el.style.transform="translateX(12px)";setTimeout(()=>el.remove(),220)},4200);
+}
+
+/* ---------- sidebar ---------- */
+function renderFilters(){
+  const box=document.getElementById("filters");
+  box.innerHTML=FILTERS.map(f=>{
+    const n = f.id==="all" ? downloads.length : downloads.filter(d=>d.state===f.id).length;
+    return '<button class="nav" data-filter="'+f.id+'" aria-current="'+(ui.filter===f.id)+'">'+
+      '<i class="dot" style="background:'+(f.color||"var(--border)")+'"></i>'+
+      esc(f.label)+'<span class="count">'+n+'</span></button>';
+  }).join("");
+  box.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>{ui.filter=b.dataset.filter;render()});
+}
+
+function renderSystem(){
+  const active = downloads.filter(d=>d.state==="downloading"||d.state==="retrying").length;
+  document.getElementById("slotsLabel").textContent = active+" / "+settingsCache.max_concurrent_downloads;
+  if(diskCache){
+    document.getElementById("diskLabel").textContent = fmtBytes(diskCache.free_bytes)+" free";
+    const usedPct = diskCache.total_bytes ? 100*(1-diskCache.free_bytes/diskCache.total_bytes) : 0;
+    document.getElementById("diskBar").style.width = Math.max(2,Math.min(100,usedPct))+"%";
+  }
+  const badge=document.getElementById("chromeBadge"), text=document.getElementById("chromeText");
+  if(chromeCache){
+    badge.textContent = chromeCache.host_registered ? "Registered" : "Missing";
+    badge.className = "badge badge-"+(chromeCache.host_registered ? "completed" : "failed");
+    text.textContent = chromeCache.host_registered
+      ? "Native host is registered — downloads Chrome hands off will appear here."
+      : "Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.";
+  }
+}
+
+/* ---------- list ---------- */
+function visible(){
+  let out=downloads.filter(d=>ui.filter==="all"||d.state===ui.filter);
+  if(ui.query){ const q=ui.query.toLowerCase();
+    out=out.filter(d=>d.name.toLowerCase().includes(q)||d.host.toLowerCase().includes(q)); }
+  const s=ui.sort;
+  out.sort((a,b)=> s==="name"?a.name.localeCompare(b.name)
+    : s==="size"?b.size-a.size
+    : s==="speed"?b.speedBps-a.speedBps
+    : s==="progress"?pct(b)-pct(a)
+    : b.added-a.added);
+  return out;
+}
+
+function segbarHTML(d){
+  return '<div class="segbar" data-state="'+d.state+'" role="progressbar" aria-valuenow="'+Math.round(pct(d)*100)+'" aria-valuemin="0" aria-valuemax="100">'+
+    '<i style="width:'+(pct(d)*100)+'%"></i></div>';
+}
+
+function rowMeta(d){
+  if(d.state==="completed") return '<div class="rspeed" style="color:var(--success)">Done</div><div class="reta">'+fmtBytes(d.size)+'</div>';
+  if(d.state==="failed")    return '<div class="rspeed" style="color:var(--destructive)">Failed</div><div class="reta">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</div>';
+  if(d.state==="cancelled") return '<div class="rspeed" style="color:var(--muted-foreground)">Cancelled</div><div class="reta">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</div>';
+  if(d.state==="retrying")  return '<div class="rspeed" style="color:var(--warning)">Retrying</div><div class="reta">'+Math.round(pct(d)*100)+'%</div>';
+  if(d.state==="paused")    return '<div class="rspeed" style="color:var(--muted-foreground)">Paused</div><div class="reta">'+Math.round(pct(d)*100)+'%</div>';
+  if(d.state==="queued")    return '<div class="rspeed" style="color:var(--muted-foreground)">Queued</div><div class="reta">'+fmtBytes(d.size)+'</div>';
+  return '<div class="rspeed mono">'+fmtSpeed(d.speedBps)+'</div><div class="reta mono">'+fmtEta((d.size-d.received)/(d.speedBps||1))+' left</div>';
+}
+
+const PLAY='<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
+const PAUSE='<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+const RETRY='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>';
+const FOLDER='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
+const DOTS='<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>';
+
+function renderList(){
+  const list=document.getElementById("list");
+  const items=visible();
+  list.dataset.anyselected = ui.selected.size>0;
+
+  if(!items.length){
+    list.innerHTML='<div class="empty"><div class="ring">'+
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg></div>'+
+      '<h3>'+(ui.query?"No matches":"Nothing here yet")+'</h3>'+
+      '<p>'+(ui.query?"Try a different filename or host.":"Downloads Chrome hands off land here automatically. Or add one with the button above.")+'</p></div>';
+    return;
+  }
+
+  list.innerHTML=items.map(d=>{
+    const sel=ui.selected.has(d.id);
+    const showBar = d.state!=="completed";
+    const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
+    return '<div class="row" data-id="'+d.id+'" data-selected="'+sel+'" data-active="'+(ui.activeId===d.id)+'" tabindex="0">'+
+      '<span class="checkbox cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" aria-label="Select '+esc(d.name)+'"></span>'+
+      '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
+      '<div class="rmain">'+
+        '<div class="rtop"><span class="fname">'+esc(d.name)+'</span>'+
+          '<span class="badge badge-'+d.state+'">'+d.state[0].toUpperCase()+d.state.slice(1)+'</span>'+
+          '<span class="fhost mono">'+esc(d.host)+'</span></div>'+
+        (showBar?segbarHTML(d):'')+
+        '<div class="rbot">'+
+          ((d.state==="failed"||d.state==="retrying") && d.error
+            ? '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>'
+            : '<span class="mono">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</span>'+
+              '<span class="sep">·</span><span>'+Math.round(pct(d)*100)+'%</span>'+
+              (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'')
+          )+
+        '</div>'+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:8px">'+
+        '<div class="rmeta">'+rowMeta(d)+'</div>'+
+        '<div class="ractions">'+
+          (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-ghost btn-icon" data-act="pause" data-id="'+d.id+'" title="Pause">'+PAUSE+'</button>':'')+
+          (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume">'+PLAY+'</button>':'')+
+          (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry">'+RETRY+'</button>':'')+
+          (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder">'+FOLDER+'</button>':'')+
+          '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More">'+DOTS+'</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  }).join("");
+}
+
+/* ---------- detail sheet ---------- */
+function buildTimeline(entries){
+  if(entries.length<2) return null;
+  const start=entries[0].time, end=entries[entries.length-1].time;
+  const total=Math.max(end-start,1);
+  let bars="";
+  for(let i=0;i<entries.length-1;i++){
+    const seg=entries[i];
+    const w=(entries[i+1].time-seg.time)/total*100;
+    const t = seg.level==="warn" ? "wait" : seg.level==="error" ? "stall" : "ok";
+    bars+='<i data-t="'+t+'" style="left:'+(entries.slice(0,i).reduce((a,e,j)=>a+(entries[j+1].time-e.time)/total*100,0))+'%;width:'+w+'%"></i>';
+  }
+  return bars;
+}
+
+function renderSheet(){
+  const sheet=document.getElementById("sheet");
+  const d=downloads.find(x=>x.id===ui.activeId);
+  if(!d){ sheet.classList.add("hidden"); return; }
+  sheet.classList.remove("hidden");
+
+  const tabs=["overview","timeline","log","headers"];
+  let body="";
+
+  if(ui.tab==="overview"){
+    body='<dl class="kv">'+
+      '<dt>Status</dt><dd><span class="badge badge-'+d.state+'">'+d.state+'</span></dd>'+
+      '<dt>Progress</dt><dd class="mono">'+fmtBytes(d.received)+' / '+fmtBytes(d.size)+' ('+Math.round(pct(d)*100)+'%)</dd>'+
+      '<dt>Speed</dt><dd class="mono">'+fmtSpeed(d.speedBps)+'</dd>'+
+      '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading"?fmtEta((d.size-d.received)/(d.speedBps||1)):"—")+'</dd>'+
+      '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
+      '<dt>Source</dt><dd class="mono" style="font-size:10.5px">'+esc(d.url)+'</dd>'+
+    '</dl><div class="hr"></div><div class="sect">Resume support</div><dl class="kv">'+
+      '<dt>Accept-Ranges</dt><dd>'+(d.acceptRanges?'<span style="color:var(--success)">bytes — resumable</span>':'<span style="color:var(--warning)">not confirmed yet — may restart on failure</span>')+'</dd>'+
+      '<dt>ETag</dt><dd class="mono" style="font-size:10.5px">'+esc(d.etag||"none")+'</dd>'+
+      '<dt>Validator</dt><dd>If-Range checked on every resume</dd>'+
+      '<dt>Retry policy</dt><dd>exponential backoff, retried until it succeeds</dd>'+
+    '</dl>';
+  }
+
+  if(ui.tab==="timeline"){
+    const entries=sheetLog.id===d.id ? sheetLog.entries : [];
+    const bars=buildTimeline(entries);
+    body='<div class="sect">Connection health</div>'+
+      (bars ? '<div class="timeline">'+bars+'</div>'+
+        '<div class="tl-legend">'+
+          '<span><b style="background:color-mix(in oklab,var(--primary) 62%,transparent)"></b>Active</span>'+
+          '<span><b style="background:color-mix(in oklab,var(--destructive) 46%,transparent)"></b>Failed</span>'+
+          '<span><b style="background:color-mix(in oklab,var(--warning) 40%,transparent)"></b>Backing off</span>'+
+        '</div>'
+       : '<p style="margin:0;font-size:11.5px;color:var(--muted-foreground)">Not enough history yet.</p>');
+  }
+
+  if(ui.tab==="log"){
+    const entries=sheetLog.id===d.id ? sheetLog.entries : [];
+    body = entries.length
+      ? '<div class="log">'+entries.map(l=>'<div class="log-item" data-lv="'+l.level+'">'+
+          '<span class="log-time mono">'+fmtTime(l.time)+'</span><span class="log-msg">'+esc(l.message)+'</span></div>').join("")+'</div>'
+      : '<p style="margin:0;font-size:11.5px;color:var(--muted-foreground)">No history yet.</p>';
+  }
+
+  if(ui.tab==="headers"){
+    let path=d.url; try{ path=new URL(d.url).pathname; }catch(_){}
+    body='<div class="sect">Request</div><div class="hdr-block mono">'+
+      '<span class="k">GET</span> '+esc(path)+'<br>'+
+      '<span class="k">Host:</span> '+esc(d.host)+'<br>'+
+      (d.received>0?'<span class="k">Range:</span> bytes='+Math.round(d.received).toLocaleString()+'-<br>':'')+
+      (d.etag?'<span class="k">If-Range:</span> '+esc(d.etag)+'<br>':'')+
+      '<span class="k">Cookie:</span> '+(d.hasCookie?'forwarded (from Chrome)':'none')+
+      '</div><div class="sect">Response</div><div class="hdr-block mono">'+
+      '<span class="k">Accept-Ranges:</span> '+(d.acceptRanges?"bytes":"unknown")+'<br>'+
+      (d.size?'<span class="k">Content-Length:</span> '+Math.round(d.size).toLocaleString()+'<br>':'')+
+      '<span class="k">ETag:</span> '+esc(d.etag||"none")+'</div>';
+  }
+
+  sheet.innerHTML=
+    '<div class="sheet-head"><div class="t">'+
+      '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
+      '<div style="flex:1;min-width:0"><h2>'+esc(d.name)+'</h2>'+
+        '<div class="mono" style="font-size:11px;color:var(--muted-foreground);margin-top:2px">'+esc(d.host)+'</div></div>'+
+      '<button class="btn btn-ghost btn-icon" id="closeSheet" aria-label="Close details">'+
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>'+
+    '</div>'+
+    (d.state!=="completed"?'<div style="margin-top:11px">'+segbarHTML(d)+'</div>':'')+
+    '<div style="display:flex;gap:6px;margin-top:11px">'+
+      (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-outline btn-sm" data-act="pause" data-id="'+d.id+'">'+PAUSE+' Pause</button>':'')+
+      (d.state==="paused"||d.state==="queued"?'<button class="btn btn-outline btn-sm" data-act="resume" data-id="'+d.id+'">'+PLAY+' Resume</button>':'')+
+      (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-primary btn-sm" data-act="retry" data-id="'+d.id+'">'+RETRY+' Retry</button>':'')+
+      (d.state==="completed"?'<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>':'')+
+      '<button class="btn btn-ghost btn-sm" data-act="copy" data-id="'+d.id+'">Copy link</button>'+
+    '</div></div>'+
+    '<div class="tabs" role="tablist">'+tabs.map(t=>'<button class="tab" role="tab" data-tab="'+t+'" aria-selected="'+(ui.tab===t)+'">'+t[0].toUpperCase()+t.slice(1)+'</button>').join("")+'</div>'+
+    '<div class="sheet-body">'+body+'</div>';
+
+  sheet.querySelector("#closeSheet").onclick=()=>{ui.activeId=null;render()};
+  sheet.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;refreshLog();renderSheet()});
+
+  if((ui.tab==="log"||ui.tab==="timeline") && sheetLog.id!==d.id) refreshLog();
+}
+
+let logFetchInFlight=false;
+async function refreshLog(){
+  if(!ui.activeId || logFetchInFlight) return;
+  logFetchInFlight=true;
+  try{
+    const entries = await getJSON("/api/downloads/"+ui.activeId+"/log");
+    sheetLog = {id:ui.activeId, entries};
+  }catch(_){ /* download may have just been removed */ }
+  logFetchInFlight=false;
+  if(ui.activeId) renderSheet();
+}
+
+/* ---------- header stats ---------- */
+function renderStats(){
+  const total=downloads.filter(d=>d.state==="downloading").reduce((a,d)=>a+d.speedBps,0);
+  document.getElementById("totalSpeed").textContent=fmtSpeed(total);
+  history.push(total); history.shift();
+  const dot=document.getElementById("netdot");
+  dot.classList.toggle("off",!ui.wsConnected);
+  document.getElementById("netlabel").textContent=ui.wsConnected?"Connected":"Reconnecting…";
+}
+
+function renderBulk(){
+  const bar=document.getElementById("bulkbar");
+  bar.classList.toggle("hidden", ui.selected.size===0);
+  document.getElementById("bulkCount").textContent=ui.selected.size+" selected";
+}
+
+function render(){ renderFilters(); renderList(); renderSheet(); renderStats(); renderSystem(); renderBulk(); }
+
+/* ---------- actions ---------- */
+async function act(id,what){
+  const d=downloads.find(x=>x.id===id); if(!d) return;
+  try{
+    if(what==="pause") await post("/api/downloads/"+id+"/pause");
+    else if(what==="resume") await post("/api/downloads/"+id+"/resume");
+    else if(what==="retry") await post("/api/downloads/"+id+"/retry");
+    else if(what==="reveal"){ await post("/api/downloads/"+id+"/reveal"); toast("ok","Revealed in Finder",d.name); }
+    else if(what==="copy"){
+      try{ await navigator.clipboard.writeText(d.url); toast("ok","Link copied",d.host); }
+      catch(_){ toast("err","Couldn't copy link","Clipboard access was blocked"); }
+    }
+    else if(what==="remove"){
+      await del("/api/downloads/"+id+"?delete_file=false");
+      downloads=downloads.filter(x=>x.id!==id); ui.selected.delete(id);
+      if(ui.activeId===id) ui.activeId=null;
+      toast("info","Removed from list","The file on disk was kept");
+      render();
+    }
+  }catch(err){ toast("err","Action failed",err.message); }
+}
+
+document.getElementById("list").addEventListener("click",e=>{
+  const cb=e.target.closest("[data-check]");
+  if(cb){ const id=cb.dataset.check; ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); return; }
+  const btn=e.target.closest("[data-act]");
+  if(btn){ e.stopPropagation();
+    if(btn.dataset.act==="menu") return openMenu(btn,btn.dataset.id);
+    return act(btn.dataset.id,btn.dataset.act); }
+  const row=e.target.closest(".row");
+  if(row){ ui.activeId = ui.activeId===row.dataset.id ? null : row.dataset.id; ui.tab="overview"; render(); }
+});
+document.getElementById("list").addEventListener("contextmenu",e=>{
+  const row=e.target.closest(".row"); if(!row) return;
+  e.preventDefault(); openMenu({getBoundingClientRect:()=>({left:e.clientX,bottom:e.clientY,right:e.clientX})},row.dataset.id);
+});
+
+document.getElementById("sheet").addEventListener("click",e=>{
+  const b=e.target.closest("[data-act]"); if(b) act(b.dataset.id,b.dataset.act);
+});
+
+/* ---------- context menu ---------- */
+function openMenu(anchor,id){
+  closeMenu();
+  const d=downloads.find(x=>x.id===id); if(!d) return;
+  const r=anchor.getBoundingClientRect();
+  const m=document.createElement("div");
+  m.className="menu"; m.id="ctxmenu";
+  const items=[];
+  if(d.state==="downloading"||d.state==="retrying") items.push(["pause","Pause"]);
+  if(d.state==="paused"||d.state==="queued") items.push(["resume","Resume"]);
+  if(d.state==="failed"||d.state==="cancelled") items.push(["retry","Retry now"]);
+  if(d.state==="completed") items.push(["reveal","Show in Finder"]);
+  items.push(["copy","Copy source link"]);
+  m.innerHTML=items.map(i=>'<button data-m="'+i[0]+'">'+i[1]+'</button>').join("")+
+    '<div class="msep"></div><button data-m="remove" data-danger="true">Remove from list</button>';
+  document.body.appendChild(m);
+  m.style.left=Math.min(r.left, innerWidth-200)+"px";
+  m.style.top=Math.min(r.bottom+4, innerHeight-m.offsetHeight-10)+"px";
+  m.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>{act(id,b.dataset.m);closeMenu()});
+}
+function closeMenu(){ const m=document.getElementById("ctxmenu"); if(m) m.remove(); }
+document.addEventListener("click",e=>{ if(!e.target.closest("#ctxmenu")&&!e.target.closest('[data-act="menu"]')) closeMenu(); });
+
+/* ---------- toolbar ---------- */
+document.getElementById("search").addEventListener("input",e=>{ui.query=e.target.value;renderList()});
+document.getElementById("sort").addEventListener("change",e=>{ui.sort=e.target.value;renderList()});
+document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
+  const running=downloads.filter(d=>d.state==="downloading"||d.state==="retrying");
+  const paused=downloads.filter(d=>d.state==="paused");
+  try{
+    if(running.length){ await Promise.all(running.map(d=>post("/api/downloads/"+d.id+"/pause"))); toast("info","Paused "+running.length+" downloads"); }
+    else if(paused.length){ await Promise.all(paused.map(d=>post("/api/downloads/"+d.id+"/resume"))); toast("info","Resumed all"); }
+  }catch(err){ toast("err","Action failed",err.message); }
+});
+document.getElementById("themeBtn").addEventListener("click",()=>{
+  document.documentElement.classList.toggle("dark");
+});
+
+document.getElementById("bulkbar").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-bulk]"); if(!b) return;
+  const w=b.dataset.bulk;
+  if(w==="clear"){ ui.selected.clear(); render(); return; }
+  const ids=[...ui.selected];
+  try{
+    if(w==="pause") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/pause")));
+    if(w==="resume") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/resume")));
+    if(w==="retry") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/retry")));
+    if(w==="remove"){
+      await Promise.all(ids.map(id=>del("/api/downloads/"+id+"?delete_file=false")));
+      downloads=downloads.filter(d=>!ui.selected.has(d.id));
+      if(ui.selected.has(ui.activeId)) ui.activeId=null;
+    }
+    toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
+  }catch(err){ toast("err","Bulk action failed",err.message); }
+  ui.selected.clear(); render();
+});
+
+/* ---------- dialogs ---------- */
+function closeOverlay(){ document.getElementById("overlays").innerHTML=""; }
+function overlay(html){
+  const box=document.getElementById("overlays");
+  box.innerHTML='<div class="scrim" id="scrim">'+html+'</div>';
+  document.getElementById("scrim").addEventListener("mousedown",e=>{ if(e.target.id==="scrim") closeOverlay(); });
+  const first=box.querySelector("input,select,button"); if(first) first.focus();
+  return box.querySelector(".dialog");
+}
+
+function addDialog(prefillUrl){
+  const dlg=overlay('<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="addTitle">'+
+    '<div class="dialog-head"><h2 id="addTitle">Add download</h2><p>Paste a link. FlowDownload asks the server for the real filename.</p></div>'+
+    '<div class="dialog-body">'+
+      '<div class="field"><label class="label" for="addUrl">Link</label>'+
+        '<input class="input mono" id="addUrl" placeholder="https://example.com/file.zip" value="'+esc(prefillUrl||"")+'"></div>'+
+      '<div class="field"><label class="label" for="addFolder">Save to folder</label>'+
+        '<div style="display:flex;gap:8px"><input class="input mono" id="addFolder" readonly value="'+esc(settingsCache.download_dir)+'" style="flex:1">'+
+        '<button class="btn btn-outline btn-sm" id="addBrowse">Browse</button></div></div>'+
+      '<div class="field"><label class="label" for="addName">Filename</label>'+
+        '<input class="input" id="addName" placeholder="download" value=""></div>'+
+    '</div>'+
+    '<div class="dialog-foot"><button class="btn btn-outline" data-close>Cancel</button>'+
+      '<button class="btn btn-primary" id="addGo">Add download</button></div></div>');
+
+  let filenameAuto=true;
+  let probeTimer=null;
+  const urlInput=dlg.querySelector("#addUrl"), nameInput=dlg.querySelector("#addName");
+
+  function onUrlChanged(){
+    const url=urlInput.value.trim();
+    if(!url) return;
+    if(filenameAuto) nameInput.value=guessFilename(url);
+    if(probeTimer) clearTimeout(probeTimer);
+    if(url.startsWith("http://")||url.startsWith("https://")){
+      probeTimer=setTimeout(async()=>{
+        try{ const r=await getJSON("/api/probe?url="+encodeURIComponent(url));
+          if(filenameAuto) nameInput.value=r.filename; }catch(_){}
+      },600);
+    }
+  }
+  urlInput.addEventListener("input",onUrlChanged);
+  nameInput.addEventListener("input",()=>{filenameAuto=false});
+  if(prefillUrl) onUrlChanged();
+
+  dlg.querySelector("#addBrowse").onclick=async()=>{
+    try{ const r=await post("/api/pick-folder");
+      if(r.path) dlg.querySelector("#addFolder").value=r.path; }
+    catch(err){ toast("err","Couldn't open folder picker",err.message); }
+  };
+
+  dlg.querySelector("#addGo").onclick=async()=>{
+    const url=urlInput.value.trim();
+    const folder=dlg.querySelector("#addFolder").value.trim();
+    const name=nameInput.value.trim()||"download";
+    if(!url){ toast("err","Add a link first","The URL field is empty"); return; }
+    try{
+      const task=await post("/api/downloads", {url, dest_path: folder.replace(/\/$/,"")+"/"+name});
+      upsert(task); closeOverlay(); render(); toast("ok","Added",task.filename);
+    }catch(err){ toast("err","Couldn't start download",err.message); }
+  };
+}
+
+function switchRow(t,p,key,on){
+  return '<div class="setrow"><div class="txt"><div>'+t+'</div><p>'+p+'</p></div>'+
+    '<span class="switch" role="switch" aria-checked="'+on+'" data-setting="'+key+'"></span></div>';
+}
+
+function settingsPanes(){
+  return {
+    General: switchRow("Keep running when the window closes","The red close button minimizes to the menu bar instead of quitting.","minimize_to_tray",settingsCache.minimize_to_tray)+
+      switchRow("Notify when a download finishes","A macOS notification for completed or failed downloads.","notifications_enabled",settingsCache.notifications_enabled),
+    Downloads: '<div class="field" style="padding-top:10px"><label class="label">Default folder</label>'+
+      '<div style="display:flex;gap:8px"><input class="input mono" id="setDownloadDir" readonly value="'+esc(settingsCache.download_dir)+'" style="flex:1">'+
+      '<button class="btn btn-outline btn-sm" id="setBrowseDir">Browse</button></div></div>'+
+      '<div class="field"><label class="label">Downloads at once</label><select class="input" id="setMaxConcurrent" data-select="max_concurrent_downloads">'+
+      [1,2,3,4,5,6,8,10].map(n=>'<option value="'+n+'"'+(n===settingsCache.max_concurrent_downloads?" selected":"")+'>'+n+'</option>').join("")+'</select></div>',
+    Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
+      '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.")+'</p></div>'+
+      '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
+      '<p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Cookies and a browser User-Agent are always forwarded for downloads Chrome hands off, so pages that need you to be logged in keep working.</p>',
+    Advanced: '<div style="padding-top:10px;display:flex;gap:7px;flex-wrap:wrap">'+
+      '<button class="btn btn-outline btn-sm" id="setClearCompleted">Clear completed</button>'+
+      '<button class="btn btn-outline btn-sm" style="color:var(--destructive)" id="setResetAll">Reset all settings</button>'+
+      '</div><p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Partial downloads are always kept on disk after a failure or pause, so a resume days later just picks up where it left off.</p>'
+  };
+}
+
+async function settingsDialog(){
+  try{ settingsCache=await getJSON("/api/settings"); }catch(_){}
+  try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
+  const tabs=["General","Downloads","Chrome","Advanced"];
+  const panes=settingsPanes();
+
+  const dlg=overlay('<div class="dialog" style="max-width:540px" role="dialog" aria-modal="true" aria-labelledby="setTitle">'+
+    '<div class="dialog-head"><h2 id="setTitle">Settings</h2></div>'+
+    '<div class="tabs" style="padding:0 17px" role="tablist">'+tabs.map((t,i)=>'<button class="tab" role="tab" data-st="'+t+'" aria-selected="'+(i===0)+'">'+t+'</button>').join("")+'</div>'+
+    '<div class="dialog-body" id="setPane" style="padding-top:4px">'+panes.General+'</div>'+
+    '<div class="dialog-foot"><button class="btn btn-primary" data-close>Done</button></div></div>');
+
+  function wirePane(){
+    const dirBrowse=dlg.querySelector("#setBrowseDir");
+    if(dirBrowse) dirBrowse.onclick=async()=>{
+      try{ const r=await post("/api/pick-folder");
+        if(r.path){ settingsCache=await patch("/api/settings",{download_dir:r.path}); refreshTab(); toast("ok","Default folder updated"); } }
+      catch(err){ toast("err","Couldn't change folder",err.message); }
+    };
+    const maxSel=dlg.querySelector("[data-select='max_concurrent_downloads']");
+    if(maxSel) maxSel.onchange=async()=>{
+      try{ settingsCache=await patch("/api/settings",{max_concurrent_downloads:+maxSel.value}); toast("ok","Setting saved"); render(); }
+      catch(err){ toast("err","Couldn't save setting",err.message); }
+    };
+    const clearBtn=dlg.querySelector("#setClearCompleted");
+    if(clearBtn) clearBtn.onclick=async()=>{
+      try{ const r=await post("/api/downloads/clear-completed"); toast("ok","Cleared "+r.removed+" completed downloads"); }
+      catch(err){ toast("err","Couldn't clear completed",err.message); }
+    };
+    const resetBtn=dlg.querySelector("#setResetAll");
+    if(resetBtn) resetBtn.onclick=async()=>{
+      try{ settingsCache=await post("/api/settings/reset"); refreshTab(); toast("ok","Settings reset to defaults"); render(); }
+      catch(err){ toast("err","Couldn't reset settings",err.message); }
+    };
+  }
+  function refreshTab(){
+    const active=dlg.querySelector("[data-st][aria-selected='true']").dataset.st;
+    dlg.querySelector("#setPane").innerHTML=settingsPanes()[active];
+    wirePane();
+  }
+  wirePane();
+
+  dlg.addEventListener("click",async e=>{
+    const st=e.target.closest("[data-st]");
+    if(st){ dlg.querySelectorAll("[data-st]").forEach(x=>x.setAttribute("aria-selected",x===st)); refreshTab(); return; }
+    const sw=e.target.closest("[data-setting]");
+    if(sw){
+      const key=sw.dataset.setting, newVal=sw.getAttribute("aria-checked")!=="true";
+      sw.setAttribute("aria-checked",newVal);
+      try{ settingsCache=await patch("/api/settings",{[key]:newVal}); }
+      catch(err){ sw.setAttribute("aria-checked",!newVal); toast("err","Couldn't save setting",err.message); }
+    }
+  });
+}
+
+function shortcutsDialog(){
+  const rows=[["Downloads",""],["Add a download","⌘N"],["Search","⌘F"],["Pause or resume selection","Space"],
+    ["Remove from list","⌘⌫"],
+    ["View",""],["Show details","↵"],["Toggle appearance","⌘⇧L"],["Settings","⌘,"],["Shortcuts","⌘/"]];
+  overlay('<div class="dialog" style="max-width:380px" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Keyboard shortcuts</h2></div>'+
+    '<div class="dialog-body"><div class="shortcuts">'+
+    rows.map(r=>r[1]===""?'<div class="g">'+r[0]+'</div>':'<span>'+r[0]+'</span><span class="kbd">'+r[1]+'</span>').join("")+
+    '</div></div><div class="dialog-foot"><button class="btn btn-primary" data-close>Close</button></div></div>');
+}
+
+document.getElementById("addBtn").onclick=()=>addDialog();
+document.getElementById("settingsBtn").onclick=settingsDialog;
+document.getElementById("helpBtn").onclick=shortcutsDialog;
+document.addEventListener("click",e=>{ if(e.target.closest("[data-close]")) closeOverlay(); });
+
+/* ---------- keyboard ---------- */
+document.addEventListener("keydown",e=>{
+  const meta=e.metaKey||e.ctrlKey;
+  const typing=/input|textarea|select/i.test(e.target.tagName);
+  if(e.key==="Escape"){ if(document.getElementById("scrim")) closeOverlay(); else if(ui.activeId){ui.activeId=null;render()} closeMenu(); return; }
+  if(meta&&e.key==="n"){ e.preventDefault(); addDialog(); return; }
+  if(meta&&e.key==="f"){ e.preventDefault(); document.getElementById("search").focus(); return; }
+  if(meta&&e.key===","){ e.preventDefault(); settingsDialog(); return; }
+  if(meta&&e.key==="/"){ e.preventDefault(); shortcutsDialog(); return; }
+  if(meta&&e.shiftKey&&e.key.toLowerCase()==="l"){ e.preventDefault(); document.documentElement.classList.toggle("dark"); return; }
+  if(typing) return;
+  if(e.key===" "&&ui.activeId){ e.preventDefault();
+    const d=downloads.find(x=>x.id===ui.activeId);
+    if(d) act(d.id, d.state==="downloading"||d.state==="retrying"?"pause":"resume"); }
+  if(meta&&e.key==="Backspace"&&ui.activeId){ e.preventDefault(); act(ui.activeId,"remove"); }
+});
+
+/* ---------- drag & drop ---------- */
+const dz=document.getElementById("dropzone");
+let dragDepth=0;
+window.addEventListener("dragenter",e=>{e.preventDefault();dragDepth++;dz.classList.remove("hidden")});
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("dragleave",()=>{ if(--dragDepth<=0) dz.classList.add("hidden") });
+window.addEventListener("drop",e=>{ e.preventDefault(); dragDepth=0; dz.classList.add("hidden");
+  const url=e.dataTransfer.getData("text/uri-list")||e.dataTransfer.getData("text/plain");
+  addDialog(url); });
+
+/* ---------- live connection ---------- */
+let ws=null, wsRetryMs=1000;
+function connectWS(){
+  const proto = location.protocol==="https:" ? "wss:" : "ws:";
+  ws=new WebSocket(proto+"//"+location.host+"/api/events?token="+encodeURIComponent(TOKEN));
+  ws.onopen=()=>{ ui.wsConnected=true; wsRetryMs=1000; renderStats(); };
+  ws.onmessage=e=>{
+    const msg=JSON.parse(e.data);
+    if(msg.type==="added"||msg.type==="updated"){ upsert(msg.download); render(); }
+    else if(msg.type==="removed"){ downloads=downloads.filter(d=>d.id!==msg.id); if(ui.activeId===msg.id) ui.activeId=null; render(); }
+  };
+  ws.onclose=()=>{ ui.wsConnected=false; renderStats(); setTimeout(connectWS, wsRetryMs); wsRetryMs=Math.min(wsRetryMs*1.6,10000); };
+  ws.onerror=()=>{ ws.close(); };
+}
+
+async function boot(){
+  try{
+    const [tasks, settings, disk, chrome] = await Promise.all([
+      getJSON("/api/downloads"), getJSON("/api/settings"), getJSON("/api/disk"), getJSON("/api/chrome-status"),
+    ]);
+    downloads = tasks.map(normalize);
+    settingsCache = settings; diskCache = disk; chromeCache = chrome;
+  }catch(err){ toast("err","Couldn't load downloads",err.message); }
+  render();
+  connectWS();
+  setInterval(async()=>{ try{ diskCache=await getJSON("/api/disk"); renderSystem(); }catch(_){} }, 30000);
+}
+boot();
+</script>
+</body>
+</html>

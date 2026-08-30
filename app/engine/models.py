@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+
+
+class DownloadStatus(str, Enum):
+    QUEUED = "queued"
+    DOWNLOADING = "downloading"
+    PAUSED = "paused"
+    RETRYING = "retrying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class DownloadTask:
+    url: str
+    dest_path: str
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    filename: str = ""
+    total_bytes: int = 0
+    downloaded_bytes: int = 0
+    status: DownloadStatus = DownloadStatus.QUEUED
+    error_message: str = ""
+    speed_bps: float = 0.0
+    etag: str = ""
+    last_modified: str = ""
+    # Cookies captured from the browser at the moment a Chrome-intercepted
+    # download was handed off, so sites that require a login can still be
+    # fetched -- a bare requests.Session() has no session cookie otherwise.
+    cookie_header: str = ""
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    @property
+    def part_path(self) -> str:
+        return self.dest_path + ".part"
+
+    @property
+    def progress(self) -> float:
+        if self.total_bytes <= 0:
+            return 0.0
+        return min(1.0, self.downloaded_bytes / self.total_bytes)
+
+    def to_row(self) -> tuple:
+        return (
+            self.id,
+            self.url,
+            self.dest_path,
+            self.filename,
+            self.total_bytes,
+            self.downloaded_bytes,
+            self.status.value,
+            self.error_message,
+            self.etag,
+            self.last_modified,
+            self.cookie_header,
+            self.created_at,
+            self.updated_at,
+        )
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "DownloadTask":
+        (
+            id_, url, dest_path, filename, total_bytes, downloaded_bytes,
+            status, error_message, etag, last_modified, cookie_header, created_at, updated_at,
+        ) = row
+        return cls(
+            id=id_,
+            url=url,
+            dest_path=dest_path,
+            filename=filename,
+            total_bytes=total_bytes,
+            downloaded_bytes=downloaded_bytes,
+            status=DownloadStatus(status),
+            error_message=error_message,
+            etag=etag,
+            last_modified=last_modified,
+            cookie_header=cookie_header,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
