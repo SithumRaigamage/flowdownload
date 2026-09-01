@@ -660,6 +660,10 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
           Pause all
         </button>
+        <button class="btn btn-outline" id="removeAllBtn" style="display:none" title="Remove all completed downloads">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          Remove all
+        </button>
         <div style="margin-left:auto;display:flex;gap:7px">
           <button class="btn btn-ghost btn-icon" id="helpBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
@@ -877,6 +881,17 @@ function renderSystem(){
   const active = downloads.filter(d=>d.state==="downloading"||d.state==="retrying").length;
   document.getElementById("slotsLabel").textContent = active+" / "+settingsCache.max_concurrent_downloads;
   document.getElementById("slotCount").textContent = settingsCache.max_concurrent_downloads;
+  // Show "Remove all" only when there's at least one completed download.
+  // It's a one-click shortcut for the most common list-cleanup action --
+  // separate from the bulk-bar Remove which only acts on the current selection.
+  const completedCount = downloads.filter(d=>d.state==="completed").length;
+  const removeAllBtn = document.getElementById("removeAllBtn");
+  if(removeAllBtn){
+    removeAllBtn.style.display = completedCount > 0 ? "" : "none";
+    const label = " Remove all ("+completedCount+")";
+    const trash = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>';
+    removeAllBtn.innerHTML = trash + label;
+  }
   if(diskCache){
     document.getElementById("diskLabel").textContent = fmtBytes(diskCache.free_bytes)+" free";
     const usedPct = diskCache.total_bytes > 0
@@ -908,8 +923,8 @@ function renderSystem(){
 /* ---------- library view ---------- */
 async function renderLibrary(){
   const grid=document.getElementById("libGrid");
-  const items=libVisible();
-
+  let items;
+  try { items = libVisible(); } catch(err) { console.error("libVisible error:", err); items = []; }
   if(!items.length){
     grid.innerHTML='<div class="lib-empty" style="grid-column:1/-1">'+
       '<div class="lib-empty-icon">'+
@@ -1005,8 +1020,7 @@ function openLibPlayer(id){
       '</div>'+
       '<div class="lib-player-body">'+
         '<'+tag+' id="libMedia" controls autoplay style="width:100%;border-radius:6px;background:#000;display:block;max-height:60vh">'+
-          (mime?'<source src="/api/downloads/'+esc(d.id)+'/stream" type="'+esc(mime)+'">':'<source src="/api/downloads/'+esc(d.id)+'/stream">')+
-          'Your browser does not support '+tag+' playback.'+
+        'Your browser does not support '+tag+' playback.'+
         '</'+tag+'>'+
       '</div>'+
       '<div class="lib-player-foot">'+
@@ -1024,6 +1038,14 @@ function openLibPlayer(id){
   document.getElementById("libScrim").addEventListener("click",e=>{ if(e.target.id==="libScrim") closeLibPlayer(); });
   document.querySelectorAll(".lib-player-foot [data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
   document.getElementById("libDetailsBtn").onclick=()=>{ closeLibPlayer(); ui.activeId=id; ui.tab="overview"; setView("downloads"); render(); };
+
+  // Feed the media element via fetch so Authorization header is sent.
+  // Using <source> relied on the cookie which may not be sent by WebEngine.
+  const mediaEl=document.getElementById("libMedia");
+  fetch("/api/downloads/"+d.id+"/stream",{headers:{"Authorization":"Bearer "+TOKEN}})
+    .then(r=>r.ok ? r.blob() : Promise.reject(new Error(r.status)))
+    .then(blob=>{ mediaEl.src=URL.createObjectURL(new Blob([blob],{type:mime||"application/octet-stream"})); mediaEl.load(); })
+    .catch(()=>{ /* stream unavailable — user can still use Show in Finder */ });
 }
 
 function closeLibPlayer(){
@@ -1165,7 +1187,8 @@ function renderSheet(){
   if(!d){ sheet.classList.add("hidden"); return; }
   sheet.classList.remove("hidden");
 
-  const tabs=["overview","preview","timeline","log","headers"];
+  // Only show overview and preview — timeline/log/headers are debugging noise.
+  const tabs=["overview","preview"];
   let body="";
 
   if(ui.tab==="overview"){
@@ -1199,53 +1222,45 @@ function renderSheet(){
         m4a:"audio/mp4", flac:"audio/flac", ogg:"audio/ogg",
       };
       const mimeType = mimeByExt[ext] || "";
-      const sourceTag = mimeType ? '<source src="/api/downloads/'+d.id+'/stream" type="'+mimeType+'">' : '<source src="/api/downloads/'+d.id+'/stream">';
+      // Use a blob URL fed by fetch() so the Authorization header is sent
+      // explicitly. Cookies work in some WebEngine configs but not all, and
+      // a <video src="..."> element can't customize its request — fetch can.
+      // FileResponse still handles HTTP Range internally for the actual bytes,
+      // so seeking works once the blob is in memory.
+      const playerId="pv-"+d.id;
       body='<div style="margin-bottom:10px">'+
-        '<'+tag+' controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block">'+
-          sourceTag+
-          'Your browser does not support '+tag+' playback.'+
+        '<'+tag+' id="'+playerId+'" controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block">'+
+        'Your browser does not support '+tag+' playback.'+
         '</'+tag+'>'+
       '</div>'+
+      '<p id="'+playerId+'-status" style="font-size:11.5px;color:var(--muted-foreground);margin:0 0 10px">Loading preview…</p>'+
       '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
+      // Kick off the fetch on next tick so the DOM nodes exist first
+      setTimeout(()=>{
+        const el=document.getElementById(playerId);
+        const status=document.getElementById(playerId+"-status");
+        fetch("/api/downloads/"+d.id+"/stream",{headers:{"Authorization":"Bearer "+TOKEN}})
+          .then(r=>{
+            if(!r.ok) throw new Error(r.status+" "+r.statusText);
+            return r.blob();
+          })
+          .then(blob=>{
+            const type=mimeType||blob.type||"application/octet-stream";
+            el.src=URL.createObjectURL(new Blob([blob],{type}));
+            el.load();
+            if(status) status.remove();
+          })
+          .catch(err=>{
+            if(status){
+              status.textContent="Couldn't load preview: "+err.message;
+              status.style.color="var(--destructive)";
+            }
+          });
+      },0);
     } else {
       body='<p style="font-size:12px;color:var(--muted-foreground);margin:0 0 10px">Preview isn\'t available for this file type.</p>'+
         '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
     }
-  }
-
-  if(ui.tab==="timeline"){
-    const entries=sheetLog.id===d.id ? sheetLog.entries : [];
-    const bars=buildTimeline(entries);
-    body='<div class="sect">Connection health</div>'+
-      (bars ? '<div class="timeline">'+bars+'</div>'+
-        '<div class="tl-legend">'+
-          '<span><b style="background:color-mix(in oklab,var(--primary) 62%,transparent)"></b>Active</span>'+
-          '<span><b style="background:color-mix(in oklab,var(--destructive) 46%,transparent)"></b>Failed</span>'+
-          '<span><b style="background:color-mix(in oklab,var(--warning) 40%,transparent)"></b>Backing off</span>'+
-        '</div>'
-       : '<p style="margin:0;font-size:11.5px;color:var(--muted-foreground)">Not enough history yet.</p>');
-  }
-
-  if(ui.tab==="log"){
-    const entries=sheetLog.id===d.id ? sheetLog.entries : [];
-    body = entries.length
-      ? '<div class="log">'+entries.map(l=>'<div class="log-item" data-lv="'+l.level+'">'+
-          '<span class="log-time mono">'+fmtTime(l.time)+'</span><span class="log-msg">'+esc(l.message)+'</span></div>').join("")+'</div>'
-      : '<p style="margin:0;font-size:11.5px;color:var(--muted-foreground)">No history yet.</p>';
-  }
-
-  if(ui.tab==="headers"){
-    let path=d.url; try{ path=new URL(d.url).pathname; }catch(_){}
-    body='<div class="sect">Request</div><div class="hdr-block mono">'+
-      '<span class="k">GET</span> '+esc(path)+'<br>'+
-      '<span class="k">Host:</span> '+esc(d.host)+'<br>'+
-      (d.received>0?'<span class="k">Range:</span> bytes='+Math.round(d.received).toLocaleString()+'-<br>':'')+
-      (d.etag?'<span class="k">If-Range:</span> '+esc(d.etag)+'<br>':'')+
-      '<span class="k">Cookie:</span> '+(d.hasCookie?'forwarded (from Chrome)':'none')+
-      '</div><div class="sect">Response</div><div class="hdr-block mono">'+
-      '<span class="k">Accept-Ranges:</span> '+(d.acceptRanges?"bytes":"unknown")+'<br>'+
-      (d.size?'<span class="k">Content-Length:</span> '+Math.round(d.size).toLocaleString()+'<br>':'')+
-      '<span class="k">ETag:</span> '+esc(d.etag||"none")+'</div>';
   }
 
   sheet.innerHTML=
@@ -1269,10 +1284,8 @@ function renderSheet(){
     '<div class="sheet-body">'+body+'</div>';
 
   sheet.querySelector("#closeSheet").onclick=()=>{ui.activeId=null;render()};
-  sheet.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;refreshLog();renderSheet()});
+  sheet.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;renderSheet()});
   sheet.querySelectorAll("[data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
-
-  if((ui.tab==="log"||ui.tab==="timeline") && sheetLog.id!==d.id) refreshLog();
 }
 
 let logFetchInFlight=false;
@@ -1395,23 +1408,36 @@ document.getElementById("startAllBtn").addEventListener("click",async()=>{
     toast("ok","Starting all","Paused and queued downloads will begin shortly");
   }catch(err){ toast("err","Couldn't start all",err.message); }
 });
-document.getElementById("decSlot").addEventListener("click",async()=>{
-  const cur=+settingsCache.max_concurrent_downloads;
-  if(cur<=SLOT_MIN){ toast("warn","Minimum "+SLOT_MIN+" concurrent download"); return; }
+document.getElementById("removeAllBtn").addEventListener("click",async()=>{
+  const completed = downloads.filter(d=>d.state==="completed");
+  if(!completed.length) return;
   try{
-    const next=cur-1;
-    console.log("decSlot: cur="+cur+" next="+next);
+    await Promise.all(completed.map(d=>del("/api/downloads/"+d.id+"?delete_file=false")));
+    downloads = downloads.filter(d=>d.state!=="completed");
+    completed.forEach(d=>thumbCache.delete(d.id));
+    if(ui.activeId && completed.find(d=>d.id===ui.activeId)) ui.activeId = null;
+    toast("ok","Removed "+completed.length+" completed","Files are kept on disk");
+    render();
+  }catch(err){ toast("err","Couldn't remove completed",err.message); }
+});
+document.getElementById("decSlot").addEventListener("click", async () => {
+  const cur = +settingsCache.max_concurrent_downloads;
+  if(cur <= SLOT_MIN){ toast("warn","Minimum "+SLOT_MIN+" concurrent download"); return; }
+  const next = cur - 1;
+  console.log("decSlot: cur="+cur+" next="+next);
+  try{
     settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
     console.log("decSlot: server responded max="+settingsCache.max_concurrent_downloads);
     render();
   }catch(err){ toast("err","Couldn't decrease slots",err.message); }
 });
-document.getElementById("incSlot").addEventListener("click",async()=>{
-  const cur=+settingsCache.max_concurrent_downloads;
-  if(cur>=SLOT_MAX){ toast("warn","Maximum "+SLOT_MAX+" concurrent downloads"); return; }
+document.getElementById("incSlot").addEventListener("click", async (e) => {
+  e.stopPropagation(); // prevent any parent handlers from swallowing the click
+  const cur = +settingsCache.max_concurrent_downloads;
+  if(cur >= SLOT_MAX){ toast("warn","Maximum "+SLOT_MAX+" concurrent downloads"); return; }
+  const next = cur + 1;
+  console.log("incSlot: cur="+cur+" next="+next);
   try{
-    const next=cur+1;
-    console.log("incSlot: cur="+cur+" next="+next);
     settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
     console.log("incSlot: server responded max="+settingsCache.max_concurrent_downloads);
     render();
@@ -1690,7 +1716,10 @@ function connectWS(){
         if(ui.activeId===n.id) renderSheet();
       } else {
         // Library view — re-render if this item is media and might have changed state
-        if(isMediaDownload(n)) renderLibrary();
+        if(isMediaDownload(n)){
+          console.log("lib: item became media, re-rendering", n.id, n.name, n.state);
+          renderLibrary();
+        }
         renderViewNav();
       }
     }
