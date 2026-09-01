@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -15,6 +17,22 @@ from app.engine.storage import Storage
 ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 EXTERNAL_POLL_INTERVAL_MS = 2000
 HISTORY_LIMIT = 50  # per task; in-memory only, so a restart clears it -- fine for a debugging log
+
+# File-type extensions that go into subfolders when auto-folder is enabled.
+AUTO_FOLDER_VIDEO = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".vid", ".m4v"}
+AUTO_FOLDER_AUDIO = {".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg"}
+AUTO_FOLDER_DOCUMENT = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"}
+AUTO_FOLDER_ARCHIVE = {".zip", ".tar", ".gz", ".7z", ".rar", ".dmg", ".pkg", ".iso"}
+
+
+@dataclass
+class DedupeResult:
+    """Result of a dedupe check: whether an existing completed file matches."""
+    is_duplicate: bool
+    existing_task_id: Optional[str] = None
+    existing_path: Optional[str] = None
+    existing_size: int = 0
+    existing_digest: Optional[str] = None
 
 
 class DownloadManager(QObject):
@@ -182,11 +200,15 @@ class DownloadManager(QObject):
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
-        queued = sorted(
-            (t for t in self.tasks.values() if t.status == DownloadStatus.QUEUED),
+        # Start with queued tasks (highest priority), then paused tasks.
+        # Both states mean "waiting to run" — they differ only in origin
+        # (queued = added fresh, paused = user stopped a running download).
+        candidates = sorted(
+            (t for t in self.tasks.values()
+             if t.status in (DownloadStatus.QUEUED, DownloadStatus.PAUSED)),
             key=lambda t: t.created_at,
         )
-        for task in queued[:free_slots]:
+        for task in candidates[:free_slots]:
             self._spawn(task.id)
 
     def _spawn(self, task_id: str) -> None:
@@ -208,6 +230,7 @@ class DownloadManager(QObject):
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)
         worker.metadata_resolved.connect(self._on_metadata_resolved)
+        worker.digest_computed.connect(self._on_digest_computed)
         worker.finished.connect(lambda tid=task_id: self._on_worker_finished(tid))
         self._workers[task_id] = worker
         worker.start()
@@ -273,3 +296,78 @@ class DownloadManager(QObject):
         self.task_updated.emit(task_id)
         if task.status in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
             self.task_finished.emit(task_id, status_value)
+
+    def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool) -> None:
+        """Persist the worker-computed SHA-256 and the verification badge.
+
+        `verified` is True only when the server advertised a Digest header
+        (RFC 9530) and the value matched what we computed. Most servers
+        don't send Digest, so verified=False is the common, expected case —
+        not an error. The UI uses this to decide whether to draw the
+        "verified" badge or leave the digest unbadged.
+        """
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
+        task.digest_sha256 = digest_sha256
+        task.digest_verified = verified
+        task.updated_at = time.time()
+        self.storage.save(task)
+        if verified:
+            self._log(task_id, "ok", f"Verified: SHA-256 {digest_sha256[:12]}…")
+        else:
+            self._log(task_id, "info", f"SHA-256 {digest_sha256[:12]}… (no server Digest to verify against)")
+        self.task_updated.emit(task_id)
+
+    def check_dedupe(self, url: str) -> DedupeResult:
+        """Check whether a URL is already represented in our completed history.
+
+        "Same URL" is the simple case. A more aggressive match would
+        fingerprint the content (SHA-256 of completed tasks) and compare,
+        but URLs are deterministic and avoid any hashing cost on the
+        dedupe path. The UI surfaces this as "Already downloaded" in the
+        extension popup.
+        """
+        for task in self.tasks.values():
+            if task.status == DownloadStatus.COMPLETED and task.url == url:
+                return DedupeResult(
+                    is_duplicate=True,
+                    existing_task_id=task.id,
+                    existing_path=task.dest_path,
+                    existing_size=task.total_bytes,
+                    existing_digest=task.digest_sha256 or None,
+                )
+        return DedupeResult(is_duplicate=False)
+
+    def apply_auto_folder(self, filename: str, base_dir: str | None = None) -> str:
+        """Pick a subfolder under the download dir based on the file's extension.
+
+        Returns the *unchanged* path when auto-foldering is disabled in
+        settings (so callers can pass a plain folder and the rule is opt-in).
+        When enabled, returns "base_dir/<type>/<filename>".
+        """
+        base = base_dir or self.settings.download_dir
+        if not getattr(self.settings, "auto_folder_by_type", False):
+            return os.path.join(base, filename)
+        return apply_auto_folder_for_path(filename, base)
+
+
+def apply_auto_folder_for_path(filename: str, base_dir: str) -> str:
+    """Pure function form (no Settings required) used by the native host.
+
+    The native host runs without an instance of DownloadManager (it only
+    needs to write a row to the DB), so it can't call the instance method
+    — but the routing rules live here so both paths stay in sync.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in AUTO_FOLDER_VIDEO:
+        sub = "Video"
+    elif ext in AUTO_FOLDER_AUDIO:
+        sub = "Audio"
+    elif ext in AUTO_FOLDER_DOCUMENT:
+        sub = "Documents"
+    elif ext in AUTO_FOLDER_ARCHIVE:
+        sub = "Archives"
+    else:
+        sub = "Other"
+    return os.path.join(base_dir, sub, filename)

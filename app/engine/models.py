@@ -33,6 +33,14 @@ class DownloadTask:
     # download was handed off, so sites that require a login can still be
     # fetched -- a bare requests.Session() has no session cookie otherwise.
     cookie_header: str = ""
+    # SHA-256 hex digest of the completed file. Used for deduplication:
+    # if two downloads share a URL or path AND a matching digest, they are
+    # the same file even if their names differ.
+    digest_sha256: str = ""
+    # Whether the server's Digest header (if any) matched what we computed.
+    # False means the server had no Digest header; True means it matched;
+    # a dedicated "failed" status for mismatch is overkill since we log it.
+    digest_verified: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -59,6 +67,8 @@ class DownloadTask:
             self.etag,
             self.last_modified,
             self.cookie_header,
+            self.digest_sha256,
+            self.digest_verified,
             self.created_at,
             self.updated_at,
         )
@@ -67,7 +77,8 @@ class DownloadTask:
     def from_row(cls, row: tuple) -> "DownloadTask":
         (
             id_, url, dest_path, filename, total_bytes, downloaded_bytes,
-            status, error_message, etag, last_modified, cookie_header, created_at, updated_at,
+            status, error_message, etag, last_modified, cookie_header,
+            digest_sha256, digest_verified, created_at, updated_at,
         ) = row
         return cls(
             id=id_,
@@ -81,6 +92,8 @@ class DownloadTask:
             etag=etag,
             last_modified=last_modified,
             cookie_header=cookie_header,
+            digest_sha256=digest_sha256 or "",
+            digest_verified=bool(digest_verified),
             created_at=created_at,
             updated_at=updated_at,
         )

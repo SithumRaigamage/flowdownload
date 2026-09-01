@@ -15,8 +15,9 @@ import mimetypes
 from app.api.events import EventBroadcaster
 from app.api.main_thread import MainThreadExecutor
 from app.api.schemas import (
-    ChromeStatus, DiskInfo, DownloadOut, HistoryEntry, NewDownloadRequest, PickFolderResponse,
-    ProbeResponse, SettingsOut, SettingsPatch,
+    ChromeStatus, DedupeCheckRequest, DedupeCheckResponse, DiskInfo, DownloadOut,
+    HistoryEntry, NewDownloadRequest, PickFolderResponse, ProbeResponse,
+    SettingsOut, SettingsPatch,
 )
 from app.engine.manager import DownloadManager
 from app.engine.models import DownloadStatus
@@ -27,6 +28,60 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 NATIVE_HOST_MANIFEST = Path.home() / (
     "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
 )
+
+
+def _sniff_media_type(path: str) -> str | None:
+    """Return the right Content-Type for a downloaded file.
+
+    Some hosting sites serve real MP4 files with a .vid extension (or
+    other misnamings), which would defeat mimetypes.guess_type's purely
+    extension-based lookup and have the browser refuse to play the file.
+    Sniff the first few bytes for known media magic numbers and return
+    a definitive MIME type when we recognize them; otherwise fall back
+    to the extension-based guess.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except OSError:
+        return mimetypes.guess_type(path)[0]
+
+    # ISO Base Media (MP4, MOV, M4V, 3GP, etc.): 4-byte size + "ftyp".
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        # The major_brand at offset 8 disambiguates MP4 vs. MOV vs. M4V.
+        brand = head[8:12]
+        if brand in (b"qt  ", b"QTIM"):  # QuickTime Movie
+            return "video/quicktime"
+        if brand in (b"M4V ", b"mp4v", b"M4VP"):
+            return "video/x-m4v"
+        return "video/mp4"
+    # EBML header (Matroska / WebM).
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        # The DocType at offset 0-4 of the EBML body is "matroska" or "webm".
+        try:
+            with open(path, "rb") as f:
+                f.seek(0)
+                ebml = f.read(64)
+            # The DocType string is at a known offset; quick check: look
+            # for "webm" or "matroska" within the first 64 bytes.
+            if b"webm" in ebml:
+                return "video/webm"
+            if b"matroska" in ebml:
+                return "video/x-matroska"
+        except OSError:
+            pass
+    # RIFF ... AVI.
+    if head.startswith(b"RIFF") and head[8:12] == b"AVI ":
+        return "video/x-msvideo"
+    # MPEG-TS sync byte 0x47 every 188 bytes (best-effort: just check
+    # the first byte; this can be a false positive but those are rare).
+    if head and head[0] == 0x47:
+        return "video/mp2t"
+    # MPEG-1/2 Program Stream (older .mpg/.mpeg).
+    if head.startswith(b"\x00\x00\x01\xba"):
+        return "video/mpeg"
+
+    return mimetypes.guess_type(path)[0]
 
 
 def create_app(
@@ -101,6 +156,26 @@ def create_app(
         filename = probe_remote_filename(url) or guess_filename_from_url(url)
         return ProbeResponse(filename=filename)
 
+    @app.post("/api/dedupe-check", response_model=DedupeCheckResponse)
+    def dedupe_check(body: DedupeCheckRequest, _=Depends(require_token)):
+        """Returns whether the given URL has already been completed.
+
+        Used by the Chrome extension popup so it can surface an
+        "Already downloaded" toast instead of silently queueing a
+        duplicate.
+        """
+        def _check():
+            result = manager.check_dedupe(body.url)
+            return DedupeCheckResponse(
+                is_duplicate=result.is_duplicate,
+                existing_task_id=result.existing_task_id,
+                existing_path=result.existing_path,
+                existing_size=result.existing_size,
+                existing_digest=result.existing_digest,
+            )
+
+        return executor.call(_check)
+
     @app.post("/api/downloads/{task_id}/pause", response_model=DownloadOut)
     def pause_download(task_id: str, _=Depends(require_token)):
         return executor.call(lambda: _act_and_return(manager.pause, task_id))
@@ -156,7 +231,7 @@ def create_app(
         if dest_path is None:
             raise HTTPException(status_code=404, detail="File not found or not ready")
 
-        media_type, _ = mimetypes.guess_type(dest_path)
+        media_type = _sniff_media_type(dest_path)
         return FileResponse(
             dest_path,
             media_type=media_type or "application/octet-stream",

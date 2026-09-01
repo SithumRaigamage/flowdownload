@@ -15,6 +15,9 @@ class Settings:
     max_concurrent_downloads: int = 3
     notifications_enabled: bool = True
     minimize_to_tray: bool = False
+    # When True, new downloads are routed to <download_dir>/<type>/<file>
+    # based on extension. Off by default to preserve existing user behavior.
+    auto_folder_by_type: bool = False
 
     @classmethod
     def load(cls, path: str) -> "Settings":

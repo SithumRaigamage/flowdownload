@@ -21,6 +21,8 @@ class DownloadOut(BaseModel):
     etag: str
     last_modified: str
     has_cookie: bool
+    digest_sha256: str
+    digest_verified: bool
     created_at: float
     updated_at: float
 
@@ -43,6 +45,8 @@ class DownloadOut(BaseModel):
             # The cookie value itself is session-auth material -- the UI only
             # ever needs to know whether one was forwarded, not what it is.
             has_cookie=bool(task.cookie_header),
+            digest_sha256=task.digest_sha256,
+            digest_verified=task.digest_verified,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
@@ -85,6 +89,7 @@ class SettingsOut(BaseModel):
     max_concurrent_downloads: int
     notifications_enabled: bool
     minimize_to_tray: bool
+    auto_folder_by_type: bool
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SettingsOut":
@@ -93,6 +98,7 @@ class SettingsOut(BaseModel):
             max_concurrent_downloads=settings.max_concurrent_downloads,
             notifications_enabled=settings.notifications_enabled,
             minimize_to_tray=settings.minimize_to_tray,
+            auto_folder_by_type=settings.auto_folder_by_type,
         )
 
 
@@ -101,3 +107,16 @@ class SettingsPatch(BaseModel):
     max_concurrent_downloads: int | None = None
     notifications_enabled: bool | None = None
     minimize_to_tray: bool | None = None
+    auto_folder_by_type: bool | None = None
+
+
+class DedupeCheckRequest(BaseModel):
+    url: str
+
+
+class DedupeCheckResponse(BaseModel):
+    is_duplicate: bool
+    existing_task_id: str | None = None
+    existing_path: str | None = None
+    existing_size: int = 0
+    existing_digest: str | None = None

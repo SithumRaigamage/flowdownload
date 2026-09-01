@@ -92,13 +92,20 @@ function sendToFlowDownload(url) {
           return;
         }
         if (response && response.ok) {
-          notify("Sent to FlowDownload", response.filename || url);
-          // Track recently-sent URLs so the popup can show what's pending.
-          chrome.storage.local.get([PENDING_KEY], (data) => {
-            const pending = data[PENDING_KEY] || [];
-            pending.push(url);
-            chrome.storage.local.set({ [PENDING_KEY]: pending.slice(-20) });
-          });
+          if (response.duplicate) {
+            // The URL matches a completed task — surface that clearly so the
+            // user knows their copy is already on disk rather than wondering
+            // whether the queue swallowed it silently.
+            notify("Already downloaded", response.duplicate.dest_path || url);
+          } else {
+            notify("Sent to FlowDownload", response.filename || url);
+            // Track recently-sent URLs so the popup can show what's pending.
+            chrome.storage.local.get([PENDING_KEY], (data) => {
+              const pending = data[PENDING_KEY] || [];
+              pending.push(url);
+              chrome.storage.local.set({ [PENDING_KEY]: pending.slice(-20) });
+            });
+          }
         } else {
           notify("FlowDownload error", (response && response.error) || "Unknown error");
         }

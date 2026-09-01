@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS downloads (
     etag TEXT DEFAULT '',
     last_modified TEXT DEFAULT '',
     cookie_header TEXT DEFAULT '',
+    digest_sha256 TEXT DEFAULT '',
+    digest_verified INTEGER DEFAULT 0,
     created_at REAL,
     updated_at REAL
 );
@@ -45,7 +47,9 @@ class Storage:
     def _migrate(self) -> None:
         existing_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(downloads)")}
         for column, ddl_type in (("etag", "TEXT DEFAULT ''"), ("last_modified", "TEXT DEFAULT ''"),
-                                  ("cookie_header", "TEXT DEFAULT ''")):
+                                  ("cookie_header", "TEXT DEFAULT ''"),
+                                  ("digest_sha256", "TEXT DEFAULT ''"),
+                                  ("digest_verified", "INTEGER DEFAULT 0")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
 
@@ -55,8 +59,9 @@ class Storage:
                 """
                 INSERT INTO downloads
                     (id, url, dest_path, filename, total_bytes, downloaded_bytes,
-                     status, error_message, etag, last_modified, cookie_header, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     status, error_message, etag, last_modified, cookie_header,
+                     digest_sha256, digest_verified, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -68,6 +73,8 @@ class Storage:
                     etag=excluded.etag,
                     last_modified=excluded.last_modified,
                     cookie_header=excluded.cookie_header,
+                    digest_sha256=excluded.digest_sha256,
+                    digest_verified=excluded.digest_verified,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -83,7 +90,8 @@ class Storage:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, url, dest_path, filename, total_bytes, downloaded_bytes, "
-                "status, error_message, etag, last_modified, cookie_header, created_at, updated_at "
+                "status, error_message, etag, last_modified, cookie_header, "
+                "digest_sha256, digest_verified, created_at, updated_at "
                 "FROM downloads ORDER BY created_at DESC"
             ).fetchall()
         return [DownloadTask.from_row(row) for row in rows]

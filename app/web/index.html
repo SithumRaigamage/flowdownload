@@ -7,8 +7,6 @@
 <style>
 /* ============================================================
    THEME TOKENS — shadcn/ui variable names.
-   Replace this whole block with the :root/.dark output from
-   tweakcn "claude blu 2" (Code button) and everything retints.
    ============================================================ */
 :root{
   --background: oklch(0.985 0.004 250);
@@ -36,6 +34,24 @@
   --shadow-sm: 0 1px 2px 0 oklch(0.26 0.021 258 / 0.06);
   --shadow-md: 0 4px 12px -2px oklch(0.26 0.021 258 / 0.10), 0 2px 4px -2px oklch(0.26 0.021 258 / 0.06);
   --shadow-lg: 0 16px 40px -8px oklch(0.26 0.021 258 / 0.20), 0 4px 12px -4px oklch(0.26 0.021 258 / 0.10);
+
+  /* Glass morphism tokens */
+  --glass-bg: color-mix(in oklab, var(--card) 78%, transparent);
+  --glass-border: color-mix(in oklab, var(--border) 50%, transparent);
+  --glass-highlight: color-mix(in oklab, #fff 8%, transparent);
+  --glass-blur: 20px;
+  --glass-saturate: 130%;
+
+  /* Atmosphere blobs (light mode: subtle) */
+  --blob1-x: 12%;
+  --blob1-y: -8%;
+  --blob1-color: color-mix(in oklab, var(--primary) 18%, transparent);
+  --blob2-x: 100%;
+  --blob2-y: 0%;
+  --blob2-color: color-mix(in oklab, #6a4bff 14%, transparent);
+  --blob3-x: 88%;
+  --blob3-y: 110%;
+  --blob3-color: color-mix(in oklab, var(--success) 8%, transparent);
 }
 .dark{
   --background: oklch(0.196 0.014 258);
@@ -62,6 +78,16 @@
   --shadow-sm: 0 1px 2px 0 oklch(0 0 0 / 0.30);
   --shadow-md: 0 4px 12px -2px oklch(0 0 0 / 0.40), 0 2px 4px -2px oklch(0 0 0 / 0.30);
   --shadow-lg: 0 16px 40px -8px oklch(0 0 0 / 0.55), 0 4px 12px -4px oklch(0 0 0 / 0.40);
+
+  /* Dark glass: more opaque, more blur */
+  --glass-bg: color-mix(in oklab, var(--card) 72%, transparent);
+  --glass-border: color-mix(in oklab, var(--border) 45%, transparent);
+  --glass-highlight: color-mix(in oklab, #fff 5%, transparent);
+
+  /* Dark atmosphere: more saturated blobs */
+  --blob1-color: color-mix(in oklab, var(--primary) 28%, transparent);
+  --blob2-color: color-mix(in oklab, #6a4bff 22%, transparent);
+  --blob3-color: color-mix(in oklab, var(--success) 14%, transparent);
 }
 
 /* ---------- base ---------- */
@@ -69,7 +95,13 @@
 html,body{height:100%}
 body{
   margin:0;
-  background:var(--background);
+  /* Atmospheric background: three blurred colour blobs behind everything */
+  background:
+    radial-gradient(900px 600px at var(--blob1-x) var(--blob1-y), var(--blob1-color), transparent 65%),
+    radial-gradient(800px 700px at var(--blob2-x) var(--blob2-y), var(--blob2-color), transparent 60%),
+    radial-gradient(700px 500px at var(--blob3-x) var(--blob3-y), var(--blob3-color), transparent 65%),
+    var(--background);
+  background-attachment: fixed;
   color:var(--foreground);
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter","Segoe UI",system-ui,sans-serif;
   font-size:13px;
@@ -86,13 +118,23 @@ input,select,textarea{font:inherit;color:inherit}
 ::-webkit-scrollbar-thumb:hover{background:var(--muted-foreground);border:3px solid transparent;background-clip:content-box}
 ::-webkit-scrollbar-track{background:transparent}
 
+/* ---------- glass utility ---------- */
+.glass{
+  background:var(--glass-bg);
+  backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(1.02);
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(1.02);
+  border:1px solid var(--glass-border);
+  box-shadow:inset 0 1px 0 var(--glass-highlight), var(--shadow-md);
+}
+
 /* ---------- primitives ---------- */
 .btn{
   display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;
   border-radius:calc(var(--radius) - 2px);border:1px solid transparent;
   font-size:12.5px;font-weight:500;white-space:nowrap;
-  transition:background .13s,border-color .13s,color .13s,opacity .13s;
+  transition:background .13s,border-color .13s,color .13s,opacity .13s,transform .08s;
 }
+.btn:active{transform:scale(0.97)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn-primary{background:var(--primary);color:var(--primary-foreground)}
 .btn-primary:hover:not(:disabled){filter:brightness(1.07)}
@@ -145,36 +187,46 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 /* ---------- shell ---------- */
 .app{display:flex;flex-direction:column;height:100vh}
 
-.titlebar{
-  display:flex;align-items:center;gap:12px;height:38px;padding:0 12px;flex:none;
-  background:var(--card);border-bottom:1px solid var(--border);-webkit-user-select:none;user-select:none;
-  -webkit-app-region:drag;
+.statusbar{
+  display:flex;align-items:center;gap:12px;height:30px;padding:0 12px;flex:none;
+  border-bottom:1px solid transparent;
 }
-.titlebar button,
-.titlebar select,
-.titlebar input,
-.titlebar [role="switch"] {
-  -webkit-app-region:no-drag;
-}
-.lights{display:flex;gap:7px;padding-right:4px}
-.light{width:11px;height:11px;border-radius:99px}
-.light.r{background:#ff5f57}.light.y{background:#febc2e}.light.g{background:#28c840}
-.titlebar h1{margin:0;font-size:12.5px;font-weight:650;letter-spacing:-.005em}
 .tb-right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .throughput{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted-foreground)}
 .throughput b{color:var(--foreground);font-weight:600}
 .netdot{width:6px;height:6px;border-radius:99px;background:var(--success);flex:none}
 .netdot.off{background:var(--destructive)}
 
-.body{display:flex;flex:1;min-height:0}
+.body{display:flex;flex:1;min-height:0;position:relative}
 
 /* ---------- sidebar ---------- */
 .sidebar{
   width:216px;flex:none;display:flex;flex-direction:column;gap:2px;padding:10px 8px;
-  border-right:1px solid var(--border);background:color-mix(in oklab,var(--card) 55%,var(--background));
+  border-right:1px solid transparent;
   overflow-y:auto;
+  /* Extra shadow on the right edge so glass overlaps main content nicely */
+  position:relative;z-index:5;
 }
 .side-label{font-size:10.5px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted-foreground);padding:10px 8px 5px}
+
+.view-nav{display:flex;flex-direction:column;gap:2px;margin-bottom:4px}
+.view-btn{
+  display:flex;align-items:center;gap:9px;height:32px;padding:0 8px;border-radius:calc(var(--radius) - 2px);
+  font-size:12.5px;font-weight:500;color:var(--secondary-foreground);width:100%;text-align:left;
+  transition:background .12s,color .12s,box-shadow .12s;
+}
+.view-btn:hover{background:var(--accent)}
+.view-btn[aria-current="true"]{
+  background:color-mix(in oklab,var(--primary) 14%,transparent);
+  color:var(--primary);
+  box-shadow:inset 2px 0 0 var(--primary);
+  font-weight:600;
+}
+.view-btn svg{color:var(--muted-foreground);flex:none}
+.view-btn[aria-current="true"] svg{color:var(--primary)}
+.view-btn .count{margin-left:auto;font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.view-btn[aria-current="true"] .count{color:var(--primary);opacity:.8}
+
 .nav{display:flex;align-items:center;gap:9px;height:29px;padding:0 8px;border-radius:calc(var(--radius) - 2px);
   font-size:12.5px;font-weight:500;color:var(--secondary-foreground);width:100%;text-align:left;transition:background .12s,color .12s}
 .nav:hover{background:var(--accent)}
@@ -183,7 +235,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .nav .count{margin-left:auto;font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
 .nav[aria-current="true"] .count{color:var(--accent-foreground)}
 
-.side-card{margin:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+.side-card{margin:8px;padding:10px;border:1px solid transparent;border-radius:var(--radius)}
 .side-card .row{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:7px}
 .side-card .row span{color:var(--muted-foreground)}
 .diskbar{height:5px;border-radius:99px;background:var(--muted);overflow:hidden}
@@ -191,27 +243,40 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .side-foot{margin-top:auto;padding:8px}
 
 /* ---------- toolbar ---------- */
-.main{flex:1;min-width:0;display:flex;flex-direction:column}
-.toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);flex:none;background:var(--background)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+.toolbar{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid transparent;flex:none}
 .search{position:relative;flex:1;max-width:300px}
 .search .input{padding-left:29px}
 .search svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--muted-foreground);pointer-events:none}
 .tb-sep{width:1px;height:19px;background:var(--border);margin:0 2px}
 
-.bulkbar{display:flex;align-items:center;gap:8px;padding:7px 12px;background:color-mix(in oklab,var(--primary) 9%,var(--background));
-  border-bottom:1px solid var(--border);font-size:12.5px;flex:none}
+.bulkbar{display:flex;align-items:center;gap:8px;padding:7px 12px;
+  border-bottom:1px solid transparent;font-size:12.5px;flex:none}
 .bulkbar b{font-weight:600}
 
 /* ---------- list ---------- */
-.list{flex:1;overflow-y:auto;padding:6px}
+.list{flex:1;overflow-y:auto;padding:6px;position:relative}
 .row{
   display:grid;grid-template-columns:auto auto 1fr auto;gap:11px;align-items:center;
   padding:9px 10px;border-radius:var(--radius);border:1px solid transparent;
-  transition:background .12s,border-color .12s;cursor:default;position:relative;
+  transition:background .12s,border-color .12s,box-shadow .12s,transform .08s;cursor:default;position:relative;
 }
-.row:hover{background:var(--card);border-color:var(--border)}
-.row[data-selected="true"]{background:color-mix(in oklab,var(--primary) 8%,var(--card));border-color:color-mix(in oklab,var(--primary) 32%,transparent)}
+.row:hover:not([data-selected="true"]){
+  background:color-mix(in oklab, var(--card) 55%, transparent);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border-color:var(--glass-border);
+}
+.row[data-selected="true"]{
+  background:color-mix(in oklab,var(--primary) 9%,transparent);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border-color:color-mix(in oklab,var(--primary) 32%,transparent);
+}
+.row[data-selected="true"]:hover{
+  background:color-mix(in oklab,var(--primary) 13%,transparent);
+  border-color:color-mix(in oklab,var(--primary) 38%,transparent);
+}
 .row[data-active="true"]{box-shadow:inset 2px 0 0 var(--primary)}
+.row:active{transform:scale(0.995)}
 .row .cb{opacity:0;transition:opacity .12s}
 .row:hover .cb,.row[data-selected="true"] .cb,.list[data-anyselected="true"] .cb{opacity:1}
 
@@ -253,15 +318,158 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .empty p{margin:0;font-size:12.5px;color:var(--muted-foreground);max-width:280px}
 .empty .ring{width:46px;height:46px;border-radius:99px;border:1.5px dashed var(--border);display:grid;place-items:center;color:var(--muted-foreground)}
 
+/* ---------- library view ---------- */
+#library-view{display:none;flex:1;overflow-y:auto;padding:14px}
+#library-view.active{display:block}
+.lib-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:14px;
+}
+.lib-card{
+  border-radius:calc(var(--radius) + 2px);border:1px solid transparent;
+  overflow:hidden;cursor:pointer;position:relative;
+  transition:transform .14s cubic-bezier(.2,.9,.3,1),box-shadow .14s,border-color .14s;
+  background:color-mix(in oklab, var(--card) 60%, transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.lib-card:hover{
+  transform:translateY(-3px) scale(1.01);
+  box-shadow:var(--shadow-lg);
+  border-color:var(--glass-border);
+}
+.lib-card:active{transform:translateY(-1px) scale(0.99)}
+
+.lib-thumb{
+  width:100%;aspect-ratio:16/9;
+  background:var(--muted);
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;position:relative;
+}
+.lib-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.lib-thumb-placeholder{
+  width:100%;height:100%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:28px;font-weight:800;opacity:.25;
+  font-family:"SF Pro Display",ui-rounded,"Segoe UI",system-ui;
+  color:var(--foreground);
+  background:linear-gradient(135deg,color-mix(in oklab,var(--primary) 20%,var(--muted)),color-mix(in oklab,var(--primary) 8%,var(--muted)));
+}
+.lib-play-overlay{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  background:oklch(0 0 0 / .0);
+  transition:background .14s;
+}
+.lib-card:hover .lib-play-overlay{background:oklch(0 0 0 / .35)}
+.lib-play-btn{
+  width:44px;height:44px;border-radius:99px;
+  background:var(--primary);color:var(--primary-foreground);
+  display:grid;place-items:center;
+  opacity:0;transform:scale(0.7);
+  transition:opacity .14s,transform .14s cubic-bezier(.2,.9,.3,1);
+}
+.lib-card:hover .lib-play-btn{opacity:1;transform:scale(1)}
+
+.lib-audio-thumb{
+  width:100%;aspect-ratio:1;padding:28px;
+  background:linear-gradient(135deg,color-mix(in oklab,var(--success) 18%,var(--muted)),color-mix(in oklab,var(--success) 8%,var(--muted)));
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+}
+.lib-audio-icon{color:var(--success);opacity:.6}
+.lib-audio-wave{
+  display:flex;align-items:center;gap:3px;height:24px;
+}
+.lib-wave-bar{
+  width:4px;border-radius:2px;background:var(--success);opacity:.5;
+  animation:wave 1.2s ease-in-out infinite;
+}
+.lib-wave-bar:nth-child(1){animation-delay:0s;height:8px}
+.lib-wave-bar:nth-child(2){animation-delay:.15s;height:16px}
+.lib-wave-bar:nth-child(3){animation-delay:.3s;height:12px}
+.lib-wave-bar:nth-child(4){animation-delay:.1s;height:20px}
+.lib-wave-bar:nth-child(5){animation-delay:.25s;height:10px}
+@keyframes wave{0%,100%{transform:scaleY(0.5)}50%{transform:scaleY(1)}}
+
+.lib-meta{padding:9px 10px}
+.lib-name{font-size:12px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.lib-info{font-size:10.5px;color:var(--muted-foreground);display:flex;align-items:center;gap:5px}
+.lib-type-badge{
+  font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:1px 5px;border-radius:4px;
+  background:color-mix(in oklab,var(--primary) 14%,transparent);color:var(--primary);
+}
+.lib-type-badge.audio{
+  background:color-mix(in oklab,var(--success) 14%,transparent);color:var(--success);
+}
+
+.lib-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;
+  height:60vh;text-align:center;padding:40px;
+}
+.lib-empty-icon{width:60px;height:60px;border-radius:16px;
+  background:color-mix(in oklab,var(--primary) 12%,transparent);
+  display:grid;place-items:center;color:var(--primary);opacity:.6}
+.lib-empty h3{margin:0;font-size:15px;font-weight:600}
+.lib-empty p{margin:0;font-size:12.5px;color:var(--muted-foreground);max-width:300px}
+
+/* ---------- library player modal ---------- */
+.lib-player-scrim{
+  position:fixed;inset:0;z-index:90;
+  background:oklch(0 0 0 / .55);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  animation:fade .15s ease-out;
+}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.lib-player-card{
+  width:100%;max-width:900px;max-height:88vh;
+  border-radius:calc(var(--radius) + 6px);
+  overflow:hidden;display:flex;flex-direction:column;
+  background:color-mix(in oklab, var(--card) 88%, transparent);
+  backdrop-filter:blur(28px) saturate(140%) brightness(1.03);
+  -webkit-backdrop-filter:blur(28px) saturate(140%) brightness(1.03);
+  border:1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  box-shadow:inset 0 1px 0 color-mix(in oklab,#fff 8%,transparent), var(--shadow-lg);
+  animation:pop .2s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes pop{from{opacity:0;transform:scale(.95) translateY(8px)}to{opacity:1;transform:none}}
+.lib-player-head{
+  display:flex;align-items:center;gap:12px;padding:13px 16px;
+  border-bottom:1px solid var(--border);
+}
+.lib-player-head .ficon{width:36px;height:36px;flex:none}
+.lib-player-info{flex:1;min-width:0}
+.lib-player-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-player-host{font-size:11px;color:var(--muted-foreground);margin-top:1px}
+.lib-player-close{
+  width:30px;height:30px;border-radius:99px;
+  display:grid;place-items:center;
+  color:var(--muted-foreground);transition:background .12s,color .12s;
+}
+.lib-player-close:hover{background:var(--accent);color:var(--foreground)}
+.lib-player-body{padding:16px;overflow-y:auto}
+.lib-player-body video,
+.lib-player-body audio{
+  width:100%;border-radius:calc(var(--radius) - 2px);
+  background:#000;display:block;max-height:65vh;
+}
+.lib-player-foot{
+  display:flex;align-items:center;gap:8px;padding:10px 16px;
+  border-top:1px solid var(--border);
+}
+.lib-player-foot .btn{font-size:12px}
+
 /* ---------- detail sheet ---------- */
 .sheet{
-  width:352px;flex:none;border-left:1px solid var(--border);background:var(--card);
+  width:352px;flex:none;border-left:1px solid transparent;
   display:flex;flex-direction:column;overflow:hidden;
+  position:relative;z-index:5;
 }
-.sheet-head{padding:12px 14px;border-bottom:1px solid var(--border)}
+.sheet-head{padding:12px 14px;border-bottom:1px solid transparent}
 .sheet-head .t{display:flex;align-items:flex-start;gap:9px}
 .sheet-head h2{margin:0;font-size:13px;font-weight:650;word-break:break-all;line-height:1.35}
-.tabs{display:flex;gap:1px;padding:6px 8px 0;border-bottom:1px solid var(--border);flex:none}
+.tabs{display:flex;gap:1px;padding:6px 8px 0;border-bottom:1px solid transparent;flex:none}
 .tab{padding:6px 9px;font-size:11.5px;font-weight:550;color:var(--muted-foreground);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .12s,border-color .12s}
 .tab:hover{color:var(--foreground)}
 .tab[aria-selected="true"]{color:var(--primary);border-bottom-color:var(--primary)}
@@ -293,19 +501,23 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .hdr-block .k{color:var(--primary);font-weight:600}
 
 /* ---------- overlays ---------- */
-.scrim{position:fixed;inset:0;background:oklch(0 0 0 / .40);display:grid;place-items:center;z-index:50;padding:20px;
+.scrim{position:fixed;inset:0;background:oklch(0 0 0 / .40);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  display:grid;place-items:center;z-index:50;padding:20px;
   animation:fade .14s ease-out}
-@keyframes fade{from{opacity:0}to{opacity:1}}
 .dialog{width:100%;max-width:480px;max-height:calc(100vh - 60px);display:flex;flex-direction:column;
-  background:var(--popover);color:var(--popover-foreground);border:1px solid var(--border);
-  border-radius:calc(var(--radius) + 4px);box-shadow:var(--shadow-lg);overflow:hidden;
+  background:color-mix(in oklab, var(--popover) 88%, transparent);
+  backdrop-filter:blur(24px) saturate(140%) brightness(1.02);
+  -webkit-backdrop-filter:blur(24px) saturate(140%) brightness(1.02);
+  color:var(--popover-foreground);border:1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border-radius:calc(var(--radius) + 4px);
+  box-shadow:inset 0 1px 0 color-mix(in oklab,#fff 7%,transparent), var(--shadow-lg);overflow:hidden;
   animation:pop .16s cubic-bezier(.2,.9,.3,1)}
-@keyframes pop{from{opacity:0;transform:scale(.97) translateY(6px)}to{opacity:1;transform:none}}
 .dialog-head{padding:15px 17px 11px}
 .dialog-head h2{margin:0 0 3px;font-size:14px;font-weight:650}
 .dialog-head p{margin:0;font-size:12px;color:var(--muted-foreground)}
 .dialog-body{padding:0 17px 15px;overflow-y:auto;flex:1}
-.dialog-foot{display:flex;justify-content:flex-end;gap:7px;padding:12px 17px;border-top:1px solid var(--border);background:color-mix(in oklab,var(--muted) 45%,transparent)}
+.dialog-foot{display:flex;justify-content:flex-end;gap:7px;padding:12px 17px;border-top:1px solid var(--border);background:color-mix(in oklab,var(--muted) 40%,transparent)}
 .field{margin-bottom:13px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:11px}
 .setrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
@@ -314,8 +526,13 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .setrow .txt div{font-size:12.5px;font-weight:550}
 .setrow .txt p{margin:2px 0 0;font-size:11.5px;color:var(--muted-foreground);line-height:1.4}
 
-.menu{position:fixed;z-index:60;min-width:186px;padding:4px;background:var(--popover);border:1px solid var(--border);
-  border-radius:var(--radius);box-shadow:var(--shadow-lg);animation:pop .11s ease-out}
+.menu{position:fixed;z-index:60;min-width:186px;padding:4px;
+  background:color-mix(in oklab, var(--popover) 86%, transparent);
+  backdrop-filter:blur(20px) saturate(130%);
+  -webkit-backdrop-filter:blur(20px) saturate(130%);
+  border:1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border-radius:var(--radius);
+  box-shadow:inset 0 1px 0 color-mix(in oklab,#fff 6%,transparent), var(--shadow-lg);animation:pop .11s ease-out}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 8px;border-radius:6px;font-size:12.5px;text-align:left}
 .menu button:hover{background:var(--accent)}
 .menu button[data-danger="true"]{color:var(--destructive)}
@@ -324,7 +541,12 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 
 .toasts{position:fixed;right:16px;bottom:16px;z-index:70;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
 .toast{display:flex;align-items:flex-start;gap:9px;min-width:250px;max-width:340px;padding:10px 12px;
-  background:var(--popover);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-lg);
+  background:color-mix(in oklab, var(--popover) 86%, transparent);
+  backdrop-filter:blur(20px) saturate(130%);
+  -webkit-backdrop-filter:blur(20px) saturate(130%);
+  border:1px solid color-mix(in oklab, var(--border) 40%, transparent);
+  border-radius:var(--radius);
+  box-shadow:inset 0 1px 0 color-mix(in oklab,#fff 6%,transparent), var(--shadow-lg);
   animation:slidein .2s cubic-bezier(.2,.9,.3,1)}
 @keyframes slidein{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 .toast .tt{font-size:12.5px;font-weight:600}
@@ -334,9 +556,15 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .toast[data-kind="err"] .ti{color:var(--destructive)}
 .toast[data-kind="info"] .ti{color:var(--primary)}
 
-.dropzone{position:fixed;inset:0;z-index:80;background:color-mix(in oklab,var(--primary) 16%,oklch(0 0 0 / .3));
+.dropzone{position:fixed;inset:0;z-index:80;
+  background:color-mix(in oklab,var(--primary) 16%,oklch(0 0 0 / .3));
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);
   display:grid;place-items:center;border:2px dashed var(--primary);pointer-events:none}
-.dropzone div{background:var(--popover);padding:16px 22px;border-radius:var(--radius);box-shadow:var(--shadow-lg);font-weight:600}
+.dropzone div{
+  background:color-mix(in oklab, var(--popover) 90%, transparent);
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  padding:16px 22px;border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);font-weight:600}
 
 .shortcuts{display:grid;grid-template-columns:1fr auto;gap:8px 20px;font-size:12.5px;align-items:center}
 .shortcuts .g{grid-column:1/-1;font-size:10.5px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted-foreground);margin-top:10px}
@@ -347,16 +575,14 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important}
 }
-@media (max-width:1080px){ .sheet{position:absolute;right:0;top:38px;bottom:0;box-shadow:var(--shadow-lg);z-index:20} }
+@media (max-width:1080px){ .sheet{position:absolute;right:0;top:30px;bottom:0;box-shadow:var(--shadow-lg);z-index:20} }
 @media (max-width:760px){ .sidebar{display:none} .sheet{width:100%} }
 </style>
 </head>
 <body>
 <div class="app">
 
-  <div class="titlebar">
-    <div class="lights"><i class="light r"></i><i class="light y"></i><i class="light g"></i></div>
-    <h1>FlowDownload</h1>
+  <div class="statusbar glass">
     <div class="tb-right">
       <div class="throughput"><b id="totalSpeed" class="mono">0 B/s</b></div>
       <div class="tb-sep"></div>
@@ -368,18 +594,32 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
   </div>
 
   <div class="body">
-    <nav class="sidebar" id="sidebar">
-      <div class="side-label">Library</div>
+    <nav class="sidebar glass" id="sidebar">
+      <!-- View switcher -->
+      <div class="view-nav" id="viewNav">
+        <button class="view-btn" data-view="downloads" id="navDownloads" aria-current="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12M7 11l5 5 5-5M4 20h16"/></svg>
+          Downloads
+          <span class="count" id="navCountDownloads">0</span>
+        </button>
+        <button class="view-btn" data-view="library" id="navLibrary" aria-current="false">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/></svg>
+          Library
+          <span class="count" id="navCountLibrary">0</span>
+        </button>
+      </div>
+
       <div id="filters"></div>
+      <div id="libFilters" style="display:none"></div>
 
       <div class="side-label">System</div>
-      <div class="side-card">
+      <div class="side-card glass">
         <div class="row"><span>Active slots</span><b id="slotsLabel" class="mono">0 / 0</b></div>
         <div class="row" style="margin-bottom:4px"><span>Disk free</span><b id="diskLabel" class="mono">—</b></div>
         <div class="diskbar"><i id="diskBar" style="width:0%"></i></div>
       </div>
 
-      <div class="side-card">
+      <div class="side-card glass">
         <div class="row" style="margin-bottom:4px"><span>Chrome extension</span><span class="badge" id="chromeBadge">—</span></div>
         <p id="chromeText" style="margin:0;font-size:11px;color:var(--muted-foreground);line-height:1.45"></p>
       </div>
@@ -393,7 +633,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
     </nav>
 
     <div class="main">
-      <div class="toolbar">
+      <div class="toolbar glass" id="downloadsToolbar">
         <div class="search">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
           <input class="input" id="search" placeholder="Search downloads" aria-label="Search downloads">
@@ -431,7 +671,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
         </div>
       </div>
 
-      <div class="bulkbar hidden" id="bulkbar">
+      <div class="bulkbar glass hidden" id="bulkbar">
         <b id="bulkCount">0 selected</b>
         <div class="tb-sep"></div>
         <button class="btn btn-sm btn-ghost" data-bulk="resume">Resume</button>
@@ -442,9 +682,10 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
       </div>
 
       <div class="list" id="list"></div>
+      <div id="library-view"><div class="lib-grid" id="libGrid"></div></div>
     </div>
 
-    <aside class="sheet hidden" id="sheet" aria-label="Download details"></aside>
+    <aside class="sheet glass hidden" id="sheet" aria-label="Download details"></aside>
   </div>
 </div>
 
@@ -482,12 +723,19 @@ let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, not
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
-const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false};
+const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all"};
 const history=new Array(40).fill(0);
+const thumbCache=new Map(); // id -> dataURL
+const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","mp3","wav","aac","m4a","flac","ogg"];
+// Slot bounds: shared by the toolbar +/- buttons and the Settings dialog so
+// the cap never drifts between entry points.
+const SLOT_MIN=1, SLOT_MAX=50;
+const VIDEO_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid"];
+const AUDIO_EXTENSIONS=["mp3","wav","aac","m4a","flac","ogg"];
 
 const kindOf = n => {
   const e=(n.split(".").pop()||"").toLowerCase();
-  if(["mp4","mkv","mov","webm","avi"].includes(e)) return "video";
+  if(VIDEO_EXTENSIONS.includes(e)) return "video";
   if(["zip","dmg","tar","gz","7z","pkg","iso"].includes(e)) return "archive";
   if(["png","jpg","jpeg","gif","webp","svg","heic"].includes(e)) return "image";
   return "file";
@@ -510,16 +758,59 @@ function upsert(raw){
   if(i>=0) downloads[i]=n; else downloads.unshift(n);
 }
 
-const FILTERS=[
-  {id:"all", label:"All downloads", color:null},
-  {id:"downloading", label:"Downloading", color:"var(--primary)"},
-  {id:"retrying", label:"Retrying", color:"var(--warning)"},
-  {id:"queued", label:"Queued", color:"var(--muted-foreground)"},
-  {id:"paused", label:"Paused", color:"var(--muted-foreground)"},
-  {id:"completed", label:"Completed", color:"var(--success)"},
-  {id:"failed", label:"Failed", color:"var(--destructive)"},
-  {id:"cancelled", label:"Cancelled", color:"var(--muted-foreground)"}
-];
+/* ---------- library helpers ---------- */
+function isMediaDownload(d){
+  if(d.state !== "completed") return false;
+  const ext = (d.name.split(".").pop() || "").toLowerCase();
+  return LIBRARY_EXTENSIONS.includes(ext);
+}
+function isVideoDownload(d){
+  const ext = (d.name.split(".").pop() || "").toLowerCase();
+  return VIDEO_EXTENSIONS.includes(ext);
+}
+function isAudioDownload(d){
+  const ext = (d.name.split(".").pop() || "").toLowerCase();
+  return AUDIO_EXTENSIONS.includes(ext);
+}
+function libVisible(){
+  return downloads.filter(d=>isMediaDownload(d) && (
+    ui.libFilter==="all" ||
+    (ui.libFilter==="video" && isVideoDownload(d)) ||
+    (ui.libFilter==="audio" && isAudioDownload(d))
+  ));
+}
+
+/* ---------- thumbnail extraction ---------- */
+const _thumbVideos=new Map(); // id -> video element
+async function extractThumbnail(d){
+  if(thumbCache.has(d.id)) return thumbCache.get(d.id);
+  if(!isVideoDownload(d)) return null;
+  const url="/api/downloads/"+d.id+"/stream";
+  const v=document.createElement("video");
+  v.crossOrigin="anonymous";
+  v.preload="metadata";
+  v.muted=true;
+  v.src=url;
+  _thumbVideos.set(d.id, v);
+  return new Promise((resolve)=>{
+    const timeout=setTimeout(()=>{
+      _thumbVideos.delete(d.id); v.src=""; resolve(null);
+    },4000);
+    v.addEventListener("loadeddata",()=>{ v.currentTime=Math.min(1, v.duration*0.1); }, {once:true});
+    v.addEventListener("seeked",()=>{
+      clearTimeout(timeout);
+      try{
+        const c=document.createElement("canvas");
+        c.width=v.videoWidth||320; c.height=v.videoHeight||180;
+        const ctx=c.getContext("2d");
+        ctx.drawImage(v,0,0,c.width,c.height);
+        const url=c.toDataURL("image/jpeg",0.7);
+        thumbCache.set(d.id,url); _thumbVideos.delete(d.id); v.src=""; resolve(url);
+      }catch(e){ _thumbVideos.delete(d.id); v.src=""; resolve(null); }
+    }, {once:true});
+    v.addEventListener("error",()=>{ clearTimeout(timeout); _thumbVideos.delete(d.id); v.src=""; resolve(null); }, {once:true});
+  });
+}
 
 /* ---------- format helpers ---------- */
 const fmtBytes=b=>{ if(b<KB) return Math.round(b)+" B";
@@ -532,6 +823,7 @@ const fmtEta=s=>{ if(!isFinite(s)||s<=0) return "—";
   if(s<3600) return Math.floor(s/60)+"m "+Math.round(s%60)+"s";
   return Math.floor(s/3600)+"h "+Math.round(s%3600/60)+"m"; };
 const fmtTime=epochSec=>{ const d=new Date(epochSec*1000); return d.toTimeString().slice(0,8); };
+const fmtDate=ms=>{ const d=new Date(ms); return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:d.getFullYear()!==new Date().getFullYear()?"numeric":"undefined"}).replace(", undefined",""); };
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pct=d=>d.size>0?Math.min(1,Math.max(0,d.received/d.size)):0;
 
@@ -556,6 +848,29 @@ function renderFilters(){
       esc(f.label)+'<span class="count">'+n+'</span></button>';
   }).join("");
   box.querySelectorAll("[data-filter]").forEach(b=>b.onclick=()=>{ui.filter=b.dataset.filter;render()});
+}
+
+function renderLibFilters(){
+  const box=document.getElementById("libFilters");
+  const items=[
+    {id:"all", label:"All media"},
+    {id:"video", label:"Videos"},
+    {id:"audio", label:"Audio"},
+  ];
+  box.innerHTML=items.map(f=>{
+    const n=f.id==="all"?libVisible().length:libVisible().filter(d=>f.id==="video"?isVideoDownload(d):isAudioDownload(d)).length;
+    return '<button class="nav" data-libfilter="'+f.id+'" aria-current="'+(ui.libFilter===f.id)+'">'+esc(f.label)+'<span class="count">'+n+'</span></button>';
+  }).join("");
+  box.querySelectorAll("[data-libfilter]").forEach(b=>b.onclick=()=>{ui.libFilter=b.dataset.libfilter;renderLibrary()});
+}
+
+function renderViewNav(){
+  const dlCount=downloads.filter(d=>d.state!=="cancelled").length;
+  const libCount=downloads.filter(d=>isMediaDownload(d)).length;
+  document.getElementById("navCountDownloads").textContent=dlCount;
+  document.getElementById("navCountLibrary").textContent=libCount;
+  document.getElementById("navDownloads").setAttribute("aria-current", ui.view==="downloads");
+  document.getElementById("navLibrary").setAttribute("aria-current", ui.view==="library");
 }
 
 function renderSystem(){
@@ -590,7 +905,159 @@ function renderSystem(){
   }
 }
 
+/* ---------- library view ---------- */
+async function renderLibrary(){
+  const grid=document.getElementById("libGrid");
+  const items=libVisible();
+
+  if(!items.length){
+    grid.innerHTML='<div class="lib-empty" style="grid-column:1/-1">'+
+      '<div class="lib-empty-icon">'+
+        '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/></svg>'+
+      '</div>'+
+      '<h3>'+(ui.libFilter!=="all"?"No "+ui.libFilter+" files yet":"Your library is empty")+'</h3>'+
+      '<p>'+(ui.libFilter!=="all"?"Try a different filter, or download some "+ui.libFilter+" files.":"Download some videos or audio files and they'll appear here automatically.")+'</p>'+
+      '<button class="btn btn-primary" id="libAddBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add download</button>'+
+      '</div>';
+    grid.querySelector("#libAddBtn").onclick=()=>addDialog();
+    return;
+  }
+
+  grid.innerHTML=items.map(d=>{
+    const isVid=isVideoDownload(d);
+    const ext=(d.name.split(".").pop()||"").toLowerCase();
+    const init=d.name.charAt(0).toUpperCase();
+    const thumbId="thumb-"+d.id;
+    return '<div class="lib-card" data-libid="'+esc(d.id)+'">'+
+      '<div class="lib-thumb" id="'+thumbId+'">'+
+        (isVid
+          ? '<div class="lib-thumb-placeholder">'+esc(init)+'</div>'
+          : '<div class="lib-audio-thumb">'+
+              '<svg class="lib-audio-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>'+
+              '<div class="lib-audio-wave">'+
+                ['<div class="lib-wave-bar"></div>','<div class="lib-wave-bar"></div>','<div class="lib-wave-bar"></div>','<div class="lib-wave-bar"></div>','<div class="lib-wave-bar"></div>'].join('')+
+              '</div>'+
+            '</div>'
+        )+
+        '<div class="lib-play-overlay"><div class="lib-play-btn">'+
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>'+
+        '</div></div>'+
+      '</div>'+
+      '<div class="lib-meta">'+
+        '<div class="lib-name" title="'+esc(d.name)+'">'+esc(d.name)+'</div>'+
+        '<div class="lib-info">'+
+          '<span class="lib-type-badge'+(isVid?'':' audio')+'">'+esc(isVid?'Video':'Audio')+'</span>'+
+          '<span>'+esc(fmtBytes(d.size))+'</span>'+
+          '<span>·</span><span>'+fmtDate(d.added)+'</span>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  }).join("");
+
+  // Wire card clicks — play opens the modal
+  grid.querySelectorAll(".lib-card").forEach(card=>{
+    card.onclick=()=>openLibPlayer(card.dataset.libid);
+    card.oncontextmenu=(e)=>{e.preventDefault(); openMenu({getBoundingClientRect:()=>({left:e.clientX,bottom:e.clientY,right:e.clientX})}, card.dataset.libid); };
+  });
+
+  // Async thumbnail extraction for videos
+  for(const d of items){
+    if(!isVideoDownload(d)) continue;
+    const el=document.getElementById("thumb-"+d.id);
+    if(!el) continue;
+    const url=await extractThumbnail(d);
+    if(url){
+      el.innerHTML='<img src="'+url+'" alt="'+esc(d.name)+'" loading="lazy">'+
+        '<div class="lib-play-overlay"><div class="lib-play-btn">'+
+          '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>'+
+        '</div></div>';
+    }
+  }
+}
+
+/* ---------- library player modal ---------- */
+function openLibPlayer(id){
+  const d=downloads.find(x=>x.id===id); if(!d) return;
+  const ext=(d.name.split(".").pop()||"").toLowerCase();
+  const audioExts=["mp3","wav","aac","m4a","flac","ogg"];
+  const isVideo=!audioExts.includes(ext);
+  const tag=isVideo?"video":"audio";
+  const mimeByExt={
+    mp4:"video/mp4", mov:"video/quicktime", webm:"video/webm",
+    mkv:"video/x-matroska", avi:"video/x-msvideo", vid:"video/mp4",
+    mp3:"audio/mpeg", wav:"audio/wav", aac:"audio/aac",
+    m4a:"audio/mp4", flac:"audio/flac", ogg:"audio/ogg",
+  };
+  const mime=mimeByExt[ext]||"";
+
+  const box=document.getElementById("overlays");
+  box.innerHTML='<div class="lib-player-scrim" id="libScrim">'+
+    '<div class="lib-player-card">'+
+      '<div class="lib-player-head">'+
+        '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
+        '<div class="lib-player-info">'+
+          '<div class="lib-player-name">'+esc(d.name)+'</div>'+
+          '<div class="lib-player-host mono">'+esc(d.host)+'</div>'+
+        '</div>'+
+        '<button class="lib-player-close" id="libCloseBtn" aria-label="Close player">'+
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'+
+        '</button>'+
+      '</div>'+
+      '<div class="lib-player-body">'+
+        '<'+tag+' id="libMedia" controls autoplay style="width:100%;border-radius:6px;background:#000;display:block;max-height:60vh">'+
+          (mime?'<source src="/api/downloads/'+esc(d.id)+'/stream" type="'+esc(mime)+'">':'<source src="/api/downloads/'+esc(d.id)+'/stream">')+
+          'Your browser does not support '+tag+' playback.'+
+        '</'+tag+'>'+
+      '</div>'+
+      '<div class="lib-player-foot">'+
+        '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+esc(d.id)+'">'+
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>'+
+          'Show in Finder'+
+        '</button>'+
+        '<button class="btn btn-outline btn-sm" data-act="copy" data-id="'+esc(d.id)+'">Copy link</button>'+
+        '<button class="btn btn-ghost btn-sm" id="libDetailsBtn">View details</button>'+
+      '</div>'+
+    '</div>'+
+  '</div>';
+
+  document.getElementById("libCloseBtn").onclick=closeLibPlayer;
+  document.getElementById("libScrim").addEventListener("click",e=>{ if(e.target.id==="libScrim") closeLibPlayer(); });
+  document.querySelectorAll(".lib-player-foot [data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
+  document.getElementById("libDetailsBtn").onclick=()=>{ closeLibPlayer(); ui.activeId=id; ui.tab="overview"; setView("downloads"); render(); };
+}
+
+function closeLibPlayer(){
+  const m=document.getElementById("libMedia");
+  if(m){ m.pause(); m.src=""; }
+  const s=document.getElementById("libScrim");
+  if(s){ s.style.opacity="0";s.style.transition="opacity .15s";setTimeout(()=>s.remove(),160); }
+}
+
+/* ---------- view switching ---------- */
+function setView(v){
+  ui.view=v;
+  const isDL=v==="downloads";
+  document.getElementById("downloadsToolbar").style.display=isDL?"":"none";
+  document.getElementById("list").style.display=isDL?"":"none";
+  document.getElementById("filters").style.display=isDL?"":"none";
+  document.getElementById("libFilters").style.display=isDL?"none":"";
+  document.getElementById("library-view").classList.toggle("active",!isDL);
+  if(isDL) render();
+  else renderLibrary();
+}
+
 /* ---------- list ---------- */
+const FILTERS=[
+  {id:"all", label:"All downloads", color:null},
+  {id:"downloading", label:"Downloading", color:"var(--primary)"},
+  {id:"retrying", label:"Retrying", color:"var(--warning)"},
+  {id:"queued", label:"Queued", color:"var(--muted-foreground)"},
+  {id:"paused", label:"Paused", color:"var(--muted-foreground)"},
+  {id:"completed", label:"Completed", color:"var(--success)"},
+  {id:"failed", label:"Failed", color:"var(--destructive)"},
+  {id:"cancelled", label:"Cancelled", color:"var(--muted-foreground)"}
+];
+
 function visible(){
   let out=downloads.filter(d=>ui.filter==="all"||d.state===ui.filter);
   if(ui.query){ const q=ui.query.toLowerCase();
@@ -669,7 +1136,7 @@ function renderList(){
           (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume">'+PLAY+'</button>':'')+
           (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry">'+RETRY+'</button>':'')+
           (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder">'+FOLDER+'</button>':'')+
-          (MEDIA_RE.test(d.name) && d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview">'+PLAY+'</button>':'')+
+          (isMediaDownload(d)&&d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview">'+PLAY+'</button>':'')+
           '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More">'+DOTS+'</button>'+
         '</div>'+
       '</div>'+
@@ -690,15 +1157,6 @@ function buildTimeline(entries){
     bars+='<i data-t="'+t+'" style="left:'+(entries.slice(0,i).reduce((a,e,j)=>a+(entries[j+1].time-e.time)/total*100,0))+'%;width:'+w+'%"></i>';
   }
   return bars;
-}
-
-const MEDIA_EXTS = ["mp4","mov","webm","mkv","avi","vid","mp3","wav","aac","m4a","flac","ogg"];
-const MEDIA_RE = /\.(mp4|mov|webm|mkv|avi|vid|mp3|wav|aac|m4a|flac|ogg)$/i;
-
-function isMediaDownload(d){
-  if(d.state !== "completed") return false;
-  const ext = (d.name.split(".").pop() || "").toLowerCase();
-  return MEDIA_EXTS.includes(ext);
 }
 
 function renderSheet(){
@@ -731,12 +1189,20 @@ function renderSheet(){
       body='<p style="font-size:12px;color:var(--muted-foreground);margin:0">Preview is available once this download finishes.</p>';
     } else if(isMediaDownload(d)){
       const ext = (d.name.split(".").pop() || "").toLowerCase();
-      const isVideo = ["mp4","mov","webm","mkv","avi","vid"].includes(ext);
-      const tag = isVideo ? "video" : "audio";
-      const mimeType = isVideo ? "video/mp4" : "audio/mpeg";
+      const audioExts = ["mp3","wav","aac","m4a","flac","ogg"];
+      const isVid = !audioExts.includes(ext);
+      const tag = isVid ? "video" : "audio";
+      const mimeByExt={
+        mp4:"video/mp4", mov:"video/quicktime", webm:"video/webm",
+        mkv:"video/x-matroska", avi:"video/x-msvideo", vid:"video/mp4",
+        mp3:"audio/mpeg", wav:"audio/wav", aac:"audio/aac",
+        m4a:"audio/mp4", flac:"audio/flac", ogg:"audio/ogg",
+      };
+      const mimeType = mimeByExt[ext] || "";
+      const sourceTag = mimeType ? '<source src="/api/downloads/'+d.id+'/stream" type="'+mimeType+'">' : '<source src="/api/downloads/'+d.id+'/stream">';
       body='<div style="margin-bottom:10px">'+
         '<'+tag+' controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block">'+
-          '<source src="/api/downloads/'+d.id+'/stream" type="'+mimeType+'">'+
+          sourceTag+
           'Your browser does not support '+tag+' playback.'+
         '</'+tag+'>'+
       '</div>'+
@@ -804,6 +1270,7 @@ function renderSheet(){
 
   sheet.querySelector("#closeSheet").onclick=()=>{ui.activeId=null;render()};
   sheet.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;refreshLog();renderSheet()});
+  sheet.querySelectorAll("[data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
 
   if((ui.tab==="log"||ui.tab==="timeline") && sheetLog.id!==d.id) refreshLog();
 }
@@ -815,7 +1282,7 @@ async function refreshLog(){
   try{
     const entries = await getJSON("/api/downloads/"+ui.activeId+"/log");
     sheetLog = {id:ui.activeId, entries};
-  }catch(_){ /* download may have just been removed */ }
+  }catch(_){}
   logFetchInFlight=false;
   if(ui.activeId) renderSheet();
 }
@@ -836,7 +1303,9 @@ function renderBulk(){
   document.getElementById("bulkCount").textContent=ui.selected.size+" selected";
 }
 
-function render(){ renderFilters(); renderList(); renderSheet(); renderStats(); renderSystem(); renderBulk(); }
+function render(){
+  renderFilters(); renderLibFilters(); renderViewNav(); renderList(); renderSheet(); renderStats(); renderSystem(); renderBulk();
+}
 
 /* ---------- actions ---------- */
 async function act(id,what){
@@ -850,10 +1319,15 @@ async function act(id,what){
       try{ await navigator.clipboard.writeText(d.url); toast("ok","Link copied",d.host); }
       catch(_){ toast("err","Couldn't copy link","Clipboard access was blocked"); }
     }
-    else if(what==="play"){ ui.activeId = id; ui.tab = "preview"; render(); }
+    else if(what==="play"){
+      // If in library view, open the glass player. Otherwise open sheet preview.
+      if(ui.view==="library"){ openLibPlayer(id); }
+      else { ui.activeId = id; ui.tab = "preview"; render(); }
+    }
     else if(what==="remove"){
       await del("/api/downloads/"+id+"?delete_file=false");
       downloads=downloads.filter(x=>x.id!==id); ui.selected.delete(id);
+      thumbCache.delete(id);
       if(ui.activeId===id) ui.activeId=null;
       toast("info","Removed from list","The file on disk was kept");
       render();
@@ -866,9 +1340,7 @@ document.getElementById("list").addEventListener("click",e=>{
   if(cb){ const id=cb.dataset.check; ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); return; }
   const btn=e.target.closest("[data-act]");
   if(btn){ e.stopPropagation();
-    // The dots button is purely a visual hint that a context menu exists;
-    // the menu itself only opens on right-click (see contextmenu handler).
-    if(btn.dataset.act==="menu") return;
+    if(btn.dataset.act==="menu"){ openMenu(btn, btn.dataset.id); return; }
     return act(btn.dataset.id,btn.dataset.act); }
   const row=e.target.closest(".row");
   if(row){ ui.activeId = ui.activeId===row.dataset.id ? null : row.dataset.id; ui.tab="overview"; render(); }
@@ -895,6 +1367,7 @@ function openMenu(anchor,id){
   if(d.state==="failed"||d.state==="cancelled") items.push(["retry","Retry now"]);
   if(d.state==="completed") items.push(["reveal","Show in Finder"]);
   items.push(["copy","Copy source link"]);
+  if(isMediaDownload(d) && d.state==="completed") items.push(["play","Preview / Play"]);
   m.innerHTML=items.map(i=>'<button data-m="'+i[0]+'">'+i[1]+'</button>').join("")+
     '<div class="msep"></div><button data-m="remove" data-danger="true">Remove from list</button>';
   document.body.appendChild(m);
@@ -923,19 +1396,36 @@ document.getElementById("startAllBtn").addEventListener("click",async()=>{
   }catch(err){ toast("err","Couldn't start all",err.message); }
 });
 document.getElementById("decSlot").addEventListener("click",async()=>{
-  const cur=settingsCache.max_concurrent_downloads;
-  if(cur<=1) return;
-  settingsCache = await patch("/api/settings",{max_concurrent_downloads: cur-1});
-  render();
+  const cur=+settingsCache.max_concurrent_downloads;
+  if(cur<=SLOT_MIN){ toast("warn","Minimum "+SLOT_MIN+" concurrent download"); return; }
+  try{
+    const next=cur-1;
+    console.log("decSlot: cur="+cur+" next="+next);
+    settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
+    console.log("decSlot: server responded max="+settingsCache.max_concurrent_downloads);
+    render();
+  }catch(err){ toast("err","Couldn't decrease slots",err.message); }
 });
 document.getElementById("incSlot").addEventListener("click",async()=>{
-  const cur=settingsCache.max_concurrent_downloads;
-  if(cur>=20) return;
-  settingsCache = await patch("/api/settings",{max_concurrent_downloads: cur+1});
-  render();
+  const cur=+settingsCache.max_concurrent_downloads;
+  if(cur>=SLOT_MAX){ toast("warn","Maximum "+SLOT_MAX+" concurrent downloads"); return; }
+  try{
+    const next=cur+1;
+    console.log("incSlot: cur="+cur+" next="+next);
+    settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
+    console.log("incSlot: server responded max="+settingsCache.max_concurrent_downloads);
+    render();
+  }catch(err){ toast("err","Couldn't increase slots",err.message); }
 });
 document.getElementById("themeBtn").addEventListener("click",()=>{
   document.documentElement.classList.toggle("dark");
+});
+
+/* ---------- view nav ---------- */
+document.getElementById("viewNav").addEventListener("click",e=>{
+  const btn=e.target.closest(".view-btn");
+  if(!btn) return;
+  setView(btn.dataset.view);
 });
 
 document.getElementById("bulkbar").addEventListener("click",async e=>{
@@ -950,6 +1440,7 @@ document.getElementById("bulkbar").addEventListener("click",async e=>{
     if(w==="remove"){
       await Promise.all(ids.map(id=>del("/api/downloads/"+id+"?delete_file=false")));
       downloads=downloads.filter(d=>!ids.includes(d.id));
+      ids.forEach(id=>thumbCache.delete(id));
       ui.selected = new Set();
       ui.activeId = null;
     }
@@ -1007,8 +1498,6 @@ function addDialog(prefillUrl){
     try{ const r=await post("/api/pick-folder");
       if(r.path){
         dlg.querySelector("#addFolder").value=r.path;
-        // Keep settingsCache in sync so the next "Add download" defaults to
-        // the newly-picked folder (and Settings → Downloads reflects it).
         settingsCache = await patch("/api/settings",{download_dir:r.path});
       }
     }catch(err){ toast("err","Couldn't open folder picker",err.message); }
@@ -1040,11 +1529,12 @@ function settingsPanes(){
       '<button class="btn btn-outline btn-sm" id="setBrowseDir">Browse</button></div></div>'+
       '<div class="field"><label class="label">Downloads at once</label>'+
       '<div style="display:flex;gap:8px;align-items:center">'+
-        '<input class="input mono" type="number" min="1" max="50" step="1" id="setMaxConcurrent" data-input="max_concurrent_downloads" value="'+esc(settingsCache.max_concurrent_downloads)+'" style="flex:1;width:auto">'+
+        '<input class="input mono" type="number" min="'+SLOT_MIN+'" max="'+SLOT_MAX+'" step="1" id="setMaxConcurrent" data-input="max_concurrent_downloads" value="'+esc(settingsCache.max_concurrent_downloads)+'" style="flex:1;width:auto">'+
         '<button class="btn btn-primary btn-sm" id="setMaxSave">Save</button>'+
       '</div>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately.</p>'+
-      '</div>',
+      '</div>'+
+      switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type),
     Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
       '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.")+'</p></div>'+
       '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
@@ -1080,7 +1570,7 @@ async function settingsDialog(){
     if(maxInput && maxSave){
       maxInput.addEventListener("keydown",e=>{ if(e.key==="Enter") maxSave.click(); });
       maxSave.onclick=async()=>{
-        const val=Math.max(1,Math.min(50,Math.round(+maxInput.value)));
+        const val=Math.max(SLOT_MIN,Math.min(SLOT_MAX,Math.round(+maxInput.value)));
         maxInput.value=val;
         try{ settingsCache=await patch("/api/settings",{max_concurrent_downloads:val}); toast("ok","Saved — "+val+" download"+(val!==1?"s":"")+" at once"); render(); }
         catch(err){ toast("err","Couldn't save setting",err.message); }
@@ -1136,7 +1626,11 @@ document.addEventListener("click",e=>{ if(e.target.closest("[data-close]")) clos
 document.addEventListener("keydown",e=>{
   const meta=e.metaKey||e.ctrlKey;
   const typing=/input|textarea|select/i.test(e.target.tagName);
-  if(e.key==="Escape"){ if(document.getElementById("scrim")) closeOverlay(); else if(ui.activeId){ui.activeId=null;render()} closeMenu(); return; }
+  if(e.key==="Escape"){
+    if(document.getElementById("libScrim")){ closeLibPlayer(); return; }
+    if(document.getElementById("scrim")){ closeOverlay(); return; }
+    if(ui.activeId){ui.activeId=null;render()} closeMenu(); return;
+  }
   if(meta&&e.key==="n"){ e.preventDefault(); addDialog(); return; }
   if(meta&&e.key==="f"){ e.preventDefault(); document.getElementById("search").focus(); return; }
   if(meta&&e.key===","){ e.preventDefault(); settingsDialog(); return; }
@@ -1167,8 +1661,47 @@ function connectWS(){
   ws.onopen=()=>{ ui.wsConnected=true; wsRetryMs=1000; renderStats(); };
   ws.onmessage=e=>{
     const msg=JSON.parse(e.data);
-    if(msg.type==="added"||msg.type==="updated"){ upsert(msg.download); render(); }
-    else if(msg.type==="removed"){ downloads=downloads.filter(d=>d.id!==msg.id); ui.selected.delete(msg.id); if(ui.activeId===msg.id) ui.activeId=null; render(); }
+    if(msg.type==="added"){ upsert(msg.download); render(); }
+    else if(msg.type==="updated"){
+      const n=normalize(msg.download);
+      const i=downloads.findIndex(x=>x.id===n.id);
+      if(i<0){ upsert(n); render(); return; }
+      const prev=downloads[i];
+      downloads[i]=n;
+      // Live update in downloads view
+      if(ui.view==="downloads"){
+        const orderChanging = (ui.sort==="speed" && prev.speedBps!==n.speedBps)
+          || (ui.sort==="size" && prev.size!==n.size)
+          || (ui.sort==="progress" && pct(prev)!==pct(n));
+        if(orderChanging){ render(); return; }
+        const el=document.querySelector('.row[data-id="'+n.id+'"]');
+        if(el){
+          const seg=el.querySelector(".segbar");
+          if(seg){ seg.dataset.state=n.state; seg.setAttribute("aria-valuenow",String(Math.round(pct(n)*100))); const fill=seg.querySelector("i"); if(fill) fill.style.width=(pct(n)*100)+"%"; }
+          const meta=el.querySelector(".rmeta"); if(meta) meta.innerHTML=rowMeta(n);
+          const bot=el.querySelector(".rbot"); if(bot){
+            const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(n.state) && n.size>0 && !n.acceptRanges;
+            bot.innerHTML='<span class="mono">'+fmtBytes(n.received)+' of '+fmtBytes(n.size)+'</span>'+
+              '<span class="sep">·</span><span>'+Math.round(pct(n)*100)+'%</span>'+
+              (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'');
+          }
+        }
+        renderStats(); renderSystem(); renderViewNav();
+        if(ui.activeId===n.id) renderSheet();
+      } else {
+        // Library view — re-render if this item is media and might have changed state
+        if(isMediaDownload(n)) renderLibrary();
+        renderViewNav();
+      }
+    }
+    else if(msg.type==="removed"){
+      downloads=downloads.filter(d=>d.id!==msg.id);
+      ui.selected.delete(msg.id);
+      thumbCache.delete(msg.id);
+      if(ui.activeId===msg.id) ui.activeId=null;
+      if(ui.view==="library") renderLibrary();
+      renderViewNav(); render();
+    }
   };
   ws.onclose=()=>{ ui.wsConnected=false; renderStats(); setTimeout(connectWS, wsRetryMs); wsRetryMs=Math.min(wsRetryMs*1.6,10000); };
   ws.onerror=()=>{ ws.close(); };
@@ -1182,7 +1715,8 @@ async function boot(){
     downloads = tasks.map(normalize);
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
-  render();
+  // Start in downloads view (also runs the initial render)
+  setView("downloads");
   connectWS();
   setInterval(async()=>{ try{ diskCache=await getJSON("/api/disk"); renderSystem(); }catch(_){} }, 30000);
 }

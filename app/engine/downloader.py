@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import binascii
+import hashlib
+import hmac
 import os
 import re
 import threading
@@ -31,6 +34,7 @@ class DownloadWorker(QThread):
     progress = Signal(str, int, int, float)  # task_id, downloaded, total, speed_bps
     status_changed = Signal(str, str, str)  # task_id, status_value, error_message
     metadata_resolved = Signal(str, int, str, str)  # task_id, total_bytes, etag, last_modified
+    digest_computed = Signal(str, str, bool)  # task_id, sha256_hex, verified_against_server
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, parent=None):
@@ -56,6 +60,9 @@ class DownloadWorker(QThread):
         self._cancel_event = threading.Event()
         self._smoothed_speed = 0.0
         self._total_bytes = 0
+        # Parsed from the server's Digest header on the first response, if present.
+        # Stored as hex so it can be compared directly against our computed hash.
+        self._server_digest_sha256: str | None = None
 
     def pause(self) -> None:
         self._pause_event.set()
@@ -70,6 +77,23 @@ class DownloadWorker(QThread):
             try:
                 downloaded = self._attempt_download()
                 self._finalize(downloaded)
+                # Compute the SHA-256 digest after the file is on disk and
+                # renamed to its final name. This is a best-effort signal -- if
+                # hashing fails (OSError), the download is still valid; the
+                # manager will simply not record a digest for this task.
+                try:
+                    digest = _sha256_file(self.dest_path)
+                    # digest_verified is the badge surface: True when the
+                    # server's Digest header (RFC 9530) was present and
+                    # matched what we computed. False when the server gave
+                    # no header (most don't). The "mismatch" case is
+                    # surfaced through the download log instead of a
+                    # separate status, since a checksum mismatch usually
+                    # means a man-in-the-middle or a corrupted upstream.
+                    verified = self._verify_against_server(digest)
+                    self.digest_computed.emit(self.task_id, digest, verified)
+                except OSError:
+                    pass
                 self.status_changed.emit(self.task_id, DownloadStatus.COMPLETED.value, "")
                 return
             except Paused:
@@ -168,6 +192,13 @@ class DownloadWorker(QThread):
                 response.raise_for_status()
                 raise requests.exceptions.RequestException(f"Unexpected status {response.status_code}")
 
+            # Capture the server's Digest header (RFC 9530) for verification.
+            # Only relevant when the file is being written fresh (mode "wb");
+            # a 206 response covers only a suffix, so any Digest it advertises
+            # would describe the whole file, not just the partial content.
+            if mode == "wb":
+                self._server_digest_sha256 = _parse_sha256_digest(response.headers.get("Digest"))
+
             self.metadata_resolved.emit(self.task_id, self._total_bytes, self.etag, self.last_modified)
             return self._stream_to_file(response, mode, existing_bytes)
         finally:
@@ -207,6 +238,9 @@ class DownloadWorker(QThread):
 
         return downloaded
 
+    def _verify_against_server(self, computed_hex: str) -> bool:
+        return _verify_against_server(self._server_digest_sha256, computed_hex)
+
     def _finalize(self, downloaded: int) -> None:
         if self._total_bytes and os.path.getsize(self.part_path) != self._total_bytes:
             raise OSError(
@@ -215,3 +249,46 @@ class DownloadWorker(QThread):
             )
         os.replace(self.part_path, self.dest_path)
         self.progress.emit(self.task_id, downloaded, self._total_bytes, 0.0)
+
+
+def _sha256_file(path: str, chunk_size: int = 64 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+_DIGEST_SHA256_RE = re.compile(r"sha-256=([A-Za-z0-9+/=]+)", re.IGNORECASE)
+
+
+def _parse_sha256_digest(header_value: str | None) -> str | None:
+    """Extract a base64 sha-256 value from an RFC 9530 Digest header.
+
+    The header looks like "Digest: sha-256=X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=".
+    We return the base64 form (matching what hashlib.digest() produces),
+    so the manager can compare against a base64 server value. When the
+    server doesn't send one (most don't), returns None.
+    """
+    if not header_value:
+        return None
+    match = _DIGEST_SHA256_RE.search(header_value)
+    return match.group(1) if match else None
+
+
+def _verify_against_server(server_b64: str | None, computed_hex: str) -> bool:
+    """Compare computed hex digest against server's base64 digest.
+
+    Returns True if they match, False on mismatch or no server value.
+    Imported lazily because it's only used post-download and pulling in
+    base64 on every chunk-write would be wasteful.
+    """
+    if not server_b64:
+        return False
+    import base64
+    try:
+        server_bytes = base64.b64decode(server_b64)
+        computed_bytes = bytes.fromhex(computed_hex)
+    except (ValueError, binascii.Error):
+        return False
+    return hmac.compare_digest(server_bytes, computed_bytes)

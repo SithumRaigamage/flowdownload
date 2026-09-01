@@ -149,12 +149,36 @@ def handle_message(message: dict) -> dict:
     filename = os.path.basename(message.get("filename") or "") or guess_filename_from_url(url)
 
     storage = Storage(DB_PATH)
+    # Dedupe check: if the URL is already represented by a completed task,
+    # surface that to the extension so the popup can say "Already downloaded"
+    # instead of silently queueing a duplicate. We don't refuse the request
+    # outright -- the user can still choose to re-download if they want a
+    # fresh copy.
+    duplicate = None
+    for existing in storage.load_all():
+        if existing.status == DownloadStatus.COMPLETED and existing.url == url:
+            duplicate = {
+                "task_id": existing.id,
+                "dest_path": existing.dest_path,
+                "size": existing.total_bytes,
+                "digest": existing.digest_sha256,
+            }
+            break
+
+    # Auto-folder rule (matches the engine's apply_auto_folder):
+    # when the user has opted in, route by extension into a subfolder
+    # so videos land in <Downloads>/Video, archives in /Archives, etc.
+    base_dir = settings.download_dir
+    if getattr(settings, "auto_folder_by_type", False):
+        from app.engine.manager import apply_auto_folder_for_path
+        base_dir = apply_auto_folder_for_path(filename, base_dir)
+
     # Tasks already queued (here or in the running app) that haven't written
     # a byte yet have no .part file for dedupe_path's filesystem check to
     # see -- without this, two downloads handed off in quick succession with
     # the same suggested filename would collide and corrupt each other.
     reserved = {t.dest_path for t in storage.load_all()}
-    dest_path = dedupe_path(os.path.join(settings.download_dir, filename), reserved)
+    dest_path = dedupe_path(os.path.join(base_dir, filename), reserved)
     task = DownloadTask(
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
         status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",
@@ -162,7 +186,10 @@ def handle_message(message: dict) -> dict:
     storage.save(task)
 
     launch_app_if_needed()
-    return {"ok": True, "filename": task.filename}
+    response = {"ok": True, "filename": task.filename}
+    if duplicate is not None:
+        response["duplicate"] = duplicate
+    return response
 
 
 def main() -> None:
