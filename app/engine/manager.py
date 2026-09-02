@@ -294,6 +294,13 @@ class DownloadManager(QObject):
     def _on_worker_finished(self, task_id: str) -> None:
         worker = self._workers.pop(task_id, None)
         if worker is not None:
+            # Wait for the thread to actually stop before the Python wrapper can
+            # be garbage-collected. Without this, Python's GC can call the
+            # Shiboken deallocator while the C++ thread is still running, which
+            # triggers QThread's "destroyed while thread is still running" abort.
+            # A brief wait is safe here because the finished signal already
+            # guarantees run() has returned; it just hasn't been joined yet.
+            worker.wait(1000)
             worker.deleteLater()
         self._dispatch_queue()
 
