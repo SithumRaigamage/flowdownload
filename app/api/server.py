@@ -109,7 +109,7 @@ def _needs_transcode(path: str) -> bool:
     SUPPORTED_AUDIO = {"opus", "vorbis", "pcm_*", "flac"}
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-print_format", "json",
+            [_find_binary("ffprobe"), "-v", "error", "-print_format", "json",
              "-show_streams", path],
             capture_output=True, text=True, timeout=5, check=False,
         )
@@ -132,6 +132,27 @@ def _needs_transcode(path: str) -> bool:
         return True  # ffprobe missing or hung — transcode to be safe
 
 
+def _find_binary(name: str) -> str:
+    """Return the path to an executable, searching well-known macOS Homebrew
+    locations before falling back to a bare name (using PATH from the
+    current environment).
+
+    macOS GUI apps launched from Finder/Dock run under launchd with a
+    minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that excludes Homebrew's
+    /opt/homebrew/bin. This helper makes the dist .app bundle find
+    ffmpeg/ffprobe regardless of how it was launched.
+    """
+    candidates = [
+        f"/opt/homebrew/bin/{name}",      # Apple Silicon Homebrew
+        f"/usr/local/bin/{name}",         # Intel Homebrew / older installs
+        f"/opt/local/bin/{name}",         # MacPorts
+    ]
+    for path in candidates:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return name  # fallback: let subprocess find it via PATH
+
+
 def _transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> bool:
     """Transcode src_path (H.264/AAC) → dest_path (VP9/Opus WebM) using FFmpeg.
 
@@ -148,7 +169,7 @@ def _transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> bool
       gets full seek/Range support via FastAPI's FileResponse.
     """
     cmd = [
-        "ffmpeg",
+        _find_binary("ffmpeg"),
         "-hide_banner", "-loglevel", "error",
         "-y",  # overwrite existing file
         "-i", src_path,
@@ -180,7 +201,7 @@ def _probe_duration(path: str) -> float:
     """Return the duration of a media file in seconds, or 0 on error."""
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-print_format", "json",
+            [_find_binary("ffprobe"), "-v", "error", "-print_format", "json",
              "-show_format", path],
             capture_output=True, text=True, timeout=5, check=False,
         )
