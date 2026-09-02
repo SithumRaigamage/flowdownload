@@ -25,5 +25,21 @@ class EventBroadcaster:
         self._subscribers.discard(q)
 
     def publish(self, message: dict) -> None:
-        for q in list(self._subscribers):
-            self._loop.call_soon_threadsafe(q.put_nowait, message)
+        # Take a snapshot under the loop's lock semantics: call_soon_threadsafe
+        # from a different thread races with the loop being closed on shutdown.
+        # If the loop is gone or any single subscriber queue misbehaves, drop
+        # the message for that subscriber rather than crash the process.
+        try:
+            subscribers = list(self._subscribers)
+        except Exception:
+            return
+        for q in subscribers:
+            try:
+                self._loop.call_soon_threadsafe(q.put_nowait, message)
+            except (RuntimeError, asyncio.QueueFull):
+                # Loop closed, queue full, or subscriber gone -- drop the
+                # message for this subscriber. The UI is best-effort; losing
+                # one event is better than aborting the whole process.
+                continue
+            except Exception:
+                continue

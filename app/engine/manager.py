@@ -18,6 +18,13 @@ ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 EXTERNAL_POLL_INTERVAL_MS = 2000
 HISTORY_LIMIT = 50  # per task; in-memory only, so a restart clears it -- fine for a debugging log
 
+# Module-level reference to workers that didn't exit cleanly on shutdown.
+# When the manager is torn down, the worker's QThread would be destroyed while
+# still running -- Qt treats that as a fatal error and abort()s the process.
+# Keeping them alive at module scope (which outlives the manager) prevents that
+# until the OS reaps the whole process anyway. See DownloadManager.shutdown().
+_STUCK_WORKERS: list[DownloadWorker] = []
+
 # File-type extensions that go into subfolders when auto-folder is enabled.
 AUTO_FOLDER_VIDEO = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".vid", ".m4v"}
 AUTO_FOLDER_AUDIO = {".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg"}
@@ -139,9 +146,38 @@ class DownloadManager(QObject):
         self.start(task_id)
 
     def pause(self, task_id: str) -> None:
+        try:
+            self._do_pause(task_id)
+        except Exception as exc:
+            # Never let a pause call crash the Qt event loop. If something
+            # goes wrong here, log it and let the worker's eventual exit
+            # (whenever the next chunk boundary arrives) drive the state
+            # transition through _on_status_changed instead.
+            import traceback
+            print(f"FlowDownload: pause({task_id}) swallowed exception: {exc}\n{traceback.format_exc()}", flush=True)
+
+    def _do_pause(self, task_id: str) -> None:
         worker = self._workers.get(task_id)
         if worker is not None:
             worker.pause()
+        # Flip the task status *now*, before the worker exits. Otherwise
+        # _dispatch_queue() (called from _on_worker_finished when the worker
+        # finishes the current chunk) sees status==DOWNLOADING and immediately
+        # spawns a replacement, so the pause never sticks.
+        task = self.tasks.get(task_id)
+        if task is not None and task.status in ACTIVE_STATUSES:
+            task.status = DownloadStatus.PAUSED
+            task.error_message = ""
+            task.updated_at = time.time()
+            try:
+                self.storage.save(task)
+            except Exception as exc:
+                # Log but don't re-raise: the in-memory state is already
+                # correct, and the worker's eventual _on_status_changed
+                # will re-save when the worker finally unwinds.
+                import traceback
+                print(f"FlowDownload: storage.save in pause({task_id}) failed: {exc}\n{traceback.format_exc()}", flush=True)
+            self.task_updated.emit(task_id)
 
     def resume_all(self) -> None:
         """Resume all paused, queued, failed, and cancelled tasks."""
@@ -186,12 +222,32 @@ class DownloadManager(QObject):
         self._dispatch_queue()
 
     def shutdown(self) -> None:
-        """Pause (not cancel) every running download so .part files survive
-        and can resume on next launch, then wait for threads to exit cleanly."""
+        """Cancel every running download and wait for threads to exit cleanly.
+
+        Uses cancel (not pause) so workers exit at the next chunk boundary
+        rather than leaving a half-written .part file. Closes the shared
+        requests session to interrupt any worker blocked in a network syscall.
+        Workers that are still alive after the wait window are kept alive in
+        the module-level _STUCK_WORKERS list so they are not garbage-collected
+        while running -- which would trigger QThread's "destroyed while still
+        running" abort. The process is exiting anyway, so leaking them is fine.
+        """
+        # Cancel all workers so they exit at the next chunk boundary.
         for worker in list(self._workers.values()):
-            worker.pause()
+            worker.cancel()
+        # Close the shared session to unblock any worker stuck in a syscall.
+        try:
+            self._session.close()
+        except Exception:
+            pass
+        # Wait for workers to finish. Workers stuck in network I/O will exit
+        # once the socket times out (READ_TIMEOUT=10s) -- the RequestException
+        # path sees the cancel event and returns via the Paused branch.
         for worker in list(self._workers.values()):
-            worker.wait(5000)
+            if not worker.wait(5000):
+                # Still alive (stuck in network I/O). Move to module-level
+                # list so the manager's GC doesn't destroy a running QThread.
+                _STUCK_WORKERS.append(worker)
 
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
@@ -200,12 +256,12 @@ class DownloadManager(QObject):
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
-        # Start with queued tasks (highest priority), then paused tasks.
-        # Both states mean "waiting to run" — they differ only in origin
-        # (queued = added fresh, paused = user stopped a running download).
+        # Only auto-start QUEUED tasks. PAUSED tasks must wait for an explicit
+        # Resume click — otherwise the dispatcher re-spawns them immediately
+        # after the user clicks Pause, which made Pause All look broken.
         candidates = sorted(
             (t for t in self.tasks.values()
-             if t.status in (DownloadStatus.QUEUED, DownloadStatus.PAUSED)),
+             if t.status == DownloadStatus.QUEUED),
             key=lambda t: t.created_at,
         )
         for task in candidates[:free_slots]:
@@ -242,6 +298,12 @@ class DownloadManager(QObject):
         self._dispatch_queue()
 
     def _on_progress(self, task_id: str, downloaded: int, total: int, speed: float) -> None:
+        try:
+            self._do_progress(task_id, downloaded, total, speed)
+        except Exception as exc:
+            self._log(task_id, "error", f"progress handler error: {exc}")
+
+    def _do_progress(self, task_id: str, downloaded: int, total: int, speed: float) -> None:
         task = self.tasks.get(task_id)
         if task is None:
             return
@@ -253,6 +315,12 @@ class DownloadManager(QObject):
         self.task_updated.emit(task_id)
 
     def _on_metadata_resolved(self, task_id: str, total_bytes: int, etag: str, last_modified: str) -> None:
+        try:
+            self._do_metadata_resolved(task_id, total_bytes, etag, last_modified)
+        except Exception as exc:
+            self._log(task_id, "error", f"metadata handler error: {exc}")
+
+    def _do_metadata_resolved(self, task_id: str, total_bytes: int, etag: str, last_modified: str) -> None:
         task = self.tasks.get(task_id)
         if task is None:
             return
@@ -276,6 +344,12 @@ class DownloadManager(QObject):
     }
 
     def _on_status_changed(self, task_id: str, status_value: str, error_message: str) -> None:
+        try:
+            self._do_status_changed(task_id, status_value, error_message)
+        except Exception as exc:
+            self._log(task_id, "error", f"status_changed handler error: {exc}")
+
+    def _do_status_changed(self, task_id: str, status_value: str, error_message: str) -> None:
         task = self.tasks.get(task_id)
         if task is None:
             return
@@ -306,18 +380,21 @@ class DownloadManager(QObject):
         not an error. The UI uses this to decide whether to draw the
         "verified" badge or leave the digest unbadged.
         """
-        task = self.tasks.get(task_id)
-        if task is None:
-            return
-        task.digest_sha256 = digest_sha256
-        task.digest_verified = verified
-        task.updated_at = time.time()
-        self.storage.save(task)
-        if verified:
-            self._log(task_id, "ok", f"Verified: SHA-256 {digest_sha256[:12]}…")
-        else:
-            self._log(task_id, "info", f"SHA-256 {digest_sha256[:12]}… (no server Digest to verify against)")
-        self.task_updated.emit(task_id)
+        try:
+            task = self.tasks.get(task_id)
+            if task is None:
+                return
+            task.digest_sha256 = digest_sha256
+            task.digest_verified = verified
+            task.updated_at = time.time()
+            self.storage.save(task)
+            if verified:
+                self._log(task_id, "ok", f"Verified: SHA-256 {digest_sha256[:12]}…")
+            else:
+                self._log(task_id, "info", f"SHA-256 {digest_sha256[:12]}… (no server Digest to verify against)")
+            self.task_updated.emit(task_id)
+        except Exception as exc:
+            self._log(task_id, "error", f"digest handler error: {exc}")
 
     def check_dedupe(self, url: str) -> DedupeResult:
         """Check whether a URL is already represented in our completed history.

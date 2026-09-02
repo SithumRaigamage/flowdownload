@@ -306,6 +306,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
   background:linear-gradient(90deg,transparent,color-mix(in oklab,var(--warning) 45%,transparent),transparent);
   animation:sweep 1.15s linear infinite}
 @keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 
 .ractions{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
 .row:hover .ractions,.row[data-active="true"] .ractions{opacity:1}
@@ -448,17 +449,96 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
   color:var(--muted-foreground);transition:background .12s,color .12s;
 }
 .lib-player-close:hover{background:var(--accent);color:var(--foreground)}
-.lib-player-body{padding:16px;overflow-y:auto}
+.lib-player-body{padding:16px;overflow-y:auto;display:flex;flex-direction:column;gap:0;flex:1;min-height:0}
 .lib-player-body video,
 .lib-player-body audio{
-  width:100%;border-radius:calc(var(--radius) - 2px);
-  background:#000;display:block;max-height:65vh;
+  width:100%;border-radius:calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0 0;
+  background:#000;display:block;max-height:55vh;
 }
+#libPlayerWrap{flex:0 0 auto;overflow:hidden}
+.lib-ctrl{flex:0 0 auto;margin-top:0}
 .lib-player-foot{
   display:flex;align-items:center;gap:8px;padding:10px 16px;
   border-top:1px solid var(--border);
 }
 .lib-player-foot .btn{font-size:12px}
+
+/* Custom media controls bar.
+   The native <video controls> UI is rendered by Qt WebEngine's Chromium
+   and computes its seek-bar fill from buffered TimeRanges, which can
+   disagree with currentTime when the WebM was produced with a
+   header-only duration (the buffered ranges lag the actual playback
+   head by a chunk). Driving the bar from `timeupdate` events and
+   letting the user click anywhere on the track to seek is more
+   predictable. */
+.lib-ctrl{
+  display:flex;align-items:center;gap:10px;
+  padding:12px 4px 4px;color:#fff;
+  font-size:12px;user-select:none;
+  /* Solid black bar so it reads as part of the video player chrome
+     (like the strip under a YouTube video), not as a separate UI
+     surface. A clearly visible 2px separator at the top makes the
+     bar's edge obvious even when the video is also pure black. */
+  background:#000;
+  border-top:2px solid #2a2a2a;
+  border-radius:0 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px);
+}
+.lib-ctrl-btn{
+  width:36px;height:36px;flex:none;display:grid;place-items:center;
+  border-radius:99px;border:0;background:rgba(255,255,255,.08);
+  color:#fff;cursor:pointer;
+  transition:background .12s, color .12s, transform .08s;
+}
+.lib-ctrl-btn:hover{background:rgba(255,255,255,.20)}
+.lib-ctrl-btn:active{transform:scale(0.94)}
+.lib-ctrl-btn svg{width:22px;height:22px;display:block;fill:#fff;stroke:none}
+.lib-ctrl-time{
+  font-variant-numeric:tabular-nums;color:#fff;flex:none;
+  min-width:96px;text-align:center;font-size:12px;font-weight:500;
+}
+.lib-ctrl-seek{
+  -webkit-appearance:none;appearance:none;flex:1;height:16px;
+  background:transparent;cursor:pointer;padding:0;margin:0;
+  /* Click target spans full height; the visible track is the inner
+     gradient. Pointer events on the track surface still register on
+     the input. */
+}
+.lib-ctrl-seek::-webkit-slider-runnable-track{
+  height:5px;border-radius:99px;
+  background:linear-gradient(to right,
+    #5e8bff 0%, #9d6bff var(--seek-pct, 0%),
+    rgba(255,255,255,.30) var(--seek-pct, 0%), rgba(255,255,255,.30) 100%);
+}
+.lib-ctrl-seek::-moz-range-track{
+  height:5px;border-radius:99px;background:rgba(255,255,255,.30);
+}
+.lib-ctrl-seek::-moz-range-progress{
+  height:4px;border-radius:99px;
+  background:linear-gradient(to right, #5e8bff, #9d6bff);
+}
+.lib-ctrl-seek::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:12px;height:12px;
+  border-radius:50%;background:#fff;margin-top:-4px;cursor:grab;
+  box-shadow:0 0 0 3px rgba(94,139,255,.25);border:0;
+}
+.lib-ctrl-seek::-moz-range-thumb{
+  width:12px;height:12px;border-radius:50%;background:#fff;
+  border:0;cursor:grab;box-shadow:0 0 0 3px rgba(94,139,255,.25);
+}
+.lib-ctrl-seek:active::-webkit-slider-thumb{cursor:grabbing;transform:scale(1.08)}
+.lib-ctrl-volume{
+  -webkit-appearance:none;appearance:none;width:80px;height:14px;
+  background:transparent;cursor:pointer;padding:0;margin:0;
+}
+.lib-ctrl-volume::-webkit-slider-runnable-track{
+  height:3px;border-radius:99px;background:rgba(255,255,255,.16);
+}
+.lib-ctrl-volume::-moz-range-track{height:3px;border-radius:99px;background:rgba(255,255,255,.16)}
+.lib-ctrl-volume::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:10px;height:10px;
+  border-radius:50%;background:#cfd3da;margin-top:-3.5px;border:0;
+}
+.lib-ctrl-volume::-moz-range-thumb{width:10px;height:10px;border-radius:50%;background:#cfd3da;border:0}
 
 /* ---------- detail sheet ---------- */
 .sheet{
@@ -580,6 +660,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 </style>
 </head>
 <body>
+<!-- BUILD STAMP 2026-09-02-black-controls-v3 -->
 <div class="app">
 
   <div class="statusbar glass">
@@ -730,12 +811,12 @@ let sheetLog = {id:null, entries:[]};
 const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all"};
 const history=new Array(40).fill(0);
 const thumbCache=new Map(); // id -> dataURL
-const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","mp3","wav","aac","m4a","flac","ogg"];
+const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg","mp3","wav","aac","m4a","flac","ogg","opus","m4b"];
 // Slot bounds: shared by the toolbar +/- buttons and the Settings dialog so
 // the cap never drifts between entry points.
 const SLOT_MIN=1, SLOT_MAX=50;
-const VIDEO_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid"];
-const AUDIO_EXTENSIONS=["mp3","wav","aac","m4a","flac","ogg"];
+const VIDEO_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg"];
+const AUDIO_EXTENSIONS=["mp3","wav","aac","m4a","flac","ogg","opus","m4b"];
 
 const kindOf = n => {
   const e=(n.split(".").pop()||"").toLowerCase();
@@ -776,11 +857,12 @@ function isAudioDownload(d){
   const ext = (d.name.split(".").pop() || "").toLowerCase();
   return AUDIO_EXTENSIONS.includes(ext);
 }
-function libVisible(){
+function libVisible(filter){
+  filter = filter || ui.libFilter;
   return downloads.filter(d=>isMediaDownload(d) && (
-    ui.libFilter==="all" ||
-    (ui.libFilter==="video" && isVideoDownload(d)) ||
-    (ui.libFilter==="audio" && isAudioDownload(d))
+    filter==="all" ||
+    (filter==="video" && isVideoDownload(d)) ||
+    (filter==="audio" && isAudioDownload(d))
   ));
 }
 
@@ -827,7 +909,8 @@ const fmtEta=s=>{ if(!isFinite(s)||s<=0) return "—";
   if(s<3600) return Math.floor(s/60)+"m "+Math.round(s%60)+"s";
   return Math.floor(s/3600)+"h "+Math.round(s%3600/60)+"m"; };
 const fmtTime=epochSec=>{ const d=new Date(epochSec*1000); return d.toTimeString().slice(0,8); };
-const fmtDate=ms=>{ const d=new Date(ms); return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:d.getFullYear()!==new Date().getFullYear()?"numeric":"undefined"}).replace(", undefined",""); };
+// "Mon, Sep 2" or "Sep 2, 2025" depending on whether the year is current.
+const fmtDate=ms=>{ const d=new Date(ms); const opts={month:"short",day:"numeric"}; if(d.getFullYear()!==new Date().getFullYear()) opts.year="numeric"; return d.toLocaleDateString(undefined,opts); };
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pct=d=>d.size>0?Math.min(1,Math.max(0,d.received/d.size)):0;
 
@@ -861,11 +944,22 @@ function renderLibFilters(){
     {id:"video", label:"Videos"},
     {id:"audio", label:"Audio"},
   ];
+  // Counts must be computed from the unfiltered media set; otherwise the
+  // currently-active sub-filter zeros out the other two counts.
+  const allMedia = downloads.filter(d => isMediaDownload(d));
+  const countFor = id => id === "all" ? allMedia.length
+    : allMedia.filter(d => id === "video" ? isVideoDownload(d) : isAudioDownload(d)).length;
   box.innerHTML=items.map(f=>{
-    const n=f.id==="all"?libVisible().length:libVisible().filter(d=>f.id==="video"?isVideoDownload(d):isAudioDownload(d)).length;
+    const n=countFor(f.id);
     return '<button class="nav" data-libfilter="'+f.id+'" aria-current="'+(ui.libFilter===f.id)+'">'+esc(f.label)+'<span class="count">'+n+'</span></button>';
   }).join("");
-  box.querySelectorAll("[data-libfilter]").forEach(b=>b.onclick=()=>{ui.libFilter=b.dataset.libfilter;renderLibrary()});
+  box.querySelectorAll("[data-libfilter]").forEach(b=>b.onclick=(e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+    ui.libFilter=b.dataset.libfilter;
+    renderLibFilters();
+    renderLibrary();
+  });
 }
 
 function renderViewNav(){
@@ -923,6 +1017,7 @@ function renderSystem(){
 /* ---------- library view ---------- */
 async function renderLibrary(){
   const grid=document.getElementById("libGrid");
+  const filter = ui.libFilter;
   let items;
   try { items = libVisible(); } catch(err) { console.error("libVisible error:", err); items = []; }
   if(!items.length){
@@ -930,8 +1025,8 @@ async function renderLibrary(){
       '<div class="lib-empty-icon">'+
         '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 10h20"/></svg>'+
       '</div>'+
-      '<h3>'+(ui.libFilter!=="all"?"No "+ui.libFilter+" files yet":"Your library is empty")+'</h3>'+
-      '<p>'+(ui.libFilter!=="all"?"Try a different filter, or download some "+ui.libFilter+" files.":"Download some videos or audio files and they'll appear here automatically.")+'</p>'+
+      '<h3>'+(filter!=="all"?"No "+filter+" files yet":"Your library is empty")+'</h3>'+
+      '<p>'+(filter!=="all"?"Try a different filter, or download some "+filter+" files.":"Download some videos or audio files and they'll appear here automatically.")+'</p>'+
       '<button class="btn btn-primary" id="libAddBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add download</button>'+
       '</div>';
     grid.querySelector("#libAddBtn").onclick=()=>addDialog();
@@ -991,19 +1086,19 @@ async function renderLibrary(){
 }
 
 /* ---------- library player modal ---------- */
+// The library modal IS the player. Clicking a media card opens this
+// overlay; the <video>/<audio> element streams the file directly from
+// the server. The server's /stream-webm endpoint transcodes H.264/AAC
+// source on-the-fly to VP9/Opus (WebM) so Qt WebEngine's open-source
+// FFmpeg can decode it. Files already in WebM/Opus/VP9 are passed
+// through without transcoding.
 function openLibPlayer(id){
   const d=downloads.find(x=>x.id===id); if(!d) return;
   const ext=(d.name.split(".").pop()||"").toLowerCase();
   const audioExts=["mp3","wav","aac","m4a","flac","ogg"];
   const isVideo=!audioExts.includes(ext);
+  const isMedia=isVideo||audioExts.includes(ext);
   const tag=isVideo?"video":"audio";
-  const mimeByExt={
-    mp4:"video/mp4", mov:"video/quicktime", webm:"video/webm",
-    mkv:"video/x-matroska", avi:"video/x-msvideo", vid:"video/mp4",
-    mp3:"audio/mpeg", wav:"audio/wav", aac:"audio/aac",
-    m4a:"audio/mp4", flac:"audio/flac", ogg:"audio/ogg",
-  };
-  const mime=mimeByExt[ext]||"";
 
   const box=document.getElementById("overlays");
   box.innerHTML='<div class="lib-player-scrim" id="libScrim">'+
@@ -1019,9 +1114,62 @@ function openLibPlayer(id){
         '</button>'+
       '</div>'+
       '<div class="lib-player-body">'+
-        '<'+tag+' id="libMedia" controls autoplay style="width:100%;border-radius:6px;background:#000;display:block;max-height:60vh">'+
-        'Your browser does not support '+tag+' playback.'+
-        '</'+tag+'>'+
+        (isMedia
+          ? '<div id="libPlayerWrap" style="position:relative;width:100%;min-height:200px;background:#000;border-radius:6px 6px 0 0;display:flex;align-items:center;justify-content:center">'+
+              // The actual <video> or <audio> element. Hidden until the
+              // stream is ready; the transcode overlay covers it during
+              // first-play conversion. We do NOT use the native
+              // `controls` attribute because Qt WebEngine's built-in
+              // seek bar pulls from buffered TimeRanges, which can lag
+              // the actual playback head with on-the-fly WebM.
+              '<'+tag+' id="libMedia" autoplay playsinline style="width:100%;border-radius:6px 6px 0 0;background:#000;display:none;max-height:60vh">'+
+              'Your browser does not support '+tag+' playback.'+
+              '</'+tag+'>'+
+              // First-play overlay: a "Transcoding..." message with a
+              // progress bar. The <video> stays hidden behind this until
+              // the server reports the transcode is done.
+              '<div id="libTranscode" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#e6e8ec;font-size:13px">'+
+                '<div class="spinner" style="width:18px;height:18px;border:2px solid #3a3f48;border-top-color:#7d8a9c;border-radius:50%;animation:spin 0.9s linear infinite"></div>'+
+                '<div>Preparing video…</div>'+
+                '<div class="lib-transcode-bar" style="width:60%;max-width:300px;height:6px;background:#1f2329;border-radius:3px;overflow:hidden">'+
+                  '<i id="libTranscodeFill" style="display:block;width:0%;height:100%;background:linear-gradient(90deg,#5e8bff,#9d6bff);transition:width .3s"></i>'+
+                '</div>'+
+                '<div id="libTranscodePct" style="font-size:11px;color:#9ba3ae;font-variant-numeric:tabular-nums">0%</div>'+
+              '</div>'+
+            '</div>'+
+            // Custom controls bar — rendered BELOW the media element so
+            // the seek bar syncs with currentTime and lets the user
+            // click anywhere to seek, mute/unmute, play/pause, and
+            // toggle fullscreen. Drawn from scratch because the native
+            // controls are unreliable with FFmpeg-transcoded WebM.
+            '<div class="lib-ctrl" id="libCtrl">'+
+              '<button class="lib-ctrl-btn" id="libPlayBtn" aria-label="Play/Pause" title="Play / Pause (Space)">'+
+                // Play icon (shown when paused). Swapped for a pause
+                // glyph in the JS handler when the media starts.
+                // Using a Unicode triangle here instead of an SVG so
+                // there's no question of the icon rendering -- the
+                // character is part of the font, and inherits color
+                // directly.
+                '<span id="libPlayIcon" style="font-size:18px;line-height:1;color:#fff">▶</span>'+
+              '</button>'+
+              '<span class="lib-ctrl-time" id="libTime">0:00 / 0:00</span>'+
+              '<input class="lib-ctrl-seek" id="libSeek" type="range" min="0" max="100" step="0.01" value="0" aria-label="Seek" />'+
+              '<button class="lib-ctrl-btn" id="libMuteBtn" aria-label="Mute" title="Mute / Unmute (M)">'+
+                // Speaker icon (volume on). Replaced by muted icon
+                // when toggled.
+                '<span id="libVolumeIcon" style="font-size:18px;line-height:1;color:#fff">🔊</span>'+
+              '</button>'+
+              '<input class="lib-ctrl-volume" id="libVolume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />'+
+              (isVideo
+                ? '<button class="lib-ctrl-btn" id="libFsBtn" aria-label="Fullscreen" title="Fullscreen (F)">'+
+                    '<svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>'+
+                  '</button>'
+                : '')+
+            '</div>'
+          : '<div class="lib-player-no-preview">'+
+              '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'+
+              '<p>No in-app preview for this file type.</p>'+
+            '</div>')+
       '</div>'+
       '<div class="lib-player-foot">'+
         '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+esc(d.id)+'">'+
@@ -1039,18 +1187,222 @@ function openLibPlayer(id){
   document.querySelectorAll(".lib-player-foot [data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
   document.getElementById("libDetailsBtn").onclick=()=>{ closeLibPlayer(); ui.activeId=id; ui.tab="overview"; setView("downloads"); render(); };
 
-  // Feed the media element via fetch so Authorization header is sent.
-  // Using <source> relied on the cookie which may not be sent by WebEngine.
+  if(!isMedia) return;
+
+  console.log("[libPlayer] opening custom controls player for", id);
+  // Capture references to the custom controls up front so we can
+  // wire them up immediately. Without this, the buttons only become
+  // functional after startPlayback() runs (i.e., after the first
+  // transcode completes) -- which means clicking play/pause/mute
+  // while the spinner is up does nothing.
   const mediaEl=document.getElementById("libMedia");
-  fetch("/api/downloads/"+d.id+"/stream",{headers:{"Authorization":"Bearer "+TOKEN}})
-    .then(r=>r.ok ? r.blob() : Promise.reject(new Error(r.status)))
-    .then(blob=>{ mediaEl.src=URL.createObjectURL(new Blob([blob],{type:mime||"application/octet-stream"})); mediaEl.load(); })
-    .catch(()=>{ /* stream unavailable — user can still use Show in Finder */ });
+  const overlay=document.getElementById("libTranscode");
+  const fill=document.getElementById("libTranscodeFill");
+  const pctEl=document.getElementById("libTranscodePct");
+  const ctrl=document.getElementById("libCtrl");
+  const playBtn=document.getElementById("libPlayBtn");
+  const playIcon=document.getElementById("libPlayIcon");
+  const seekEl=document.getElementById("libSeek");
+  const timeEl=document.getElementById("libTime");
+  const muteBtn=document.getElementById("libMuteBtn");
+  const volEl=document.getElementById("libVolume");
+  const volIcon=document.getElementById("libVolumeIcon");
+  const fsBtn=document.getElementById("libFsBtn");
+  const streamUrl="/api/downloads/"+encodeURIComponent(id)+"/stream-webm";
+  const statusUrl="/api/downloads/"+encodeURIComponent(id)+"/transcode-status";
+  let pollTimer=null;
+  let seeking=false;  // user is dragging the seek thumb — pause timeupdate
+
+  // Unicode glyphs swapped in place when toggling play/pause and
+  // mute/unmute. We use plain text characters rather than <svg>
+  // so there's no question of the icon rendering: these characters
+  // are part of the system font and inherit color from CSS.
+  const ICON={
+    play:"▶",   // U+25B6 BLACK RIGHT-POINTING TRIANGLE
+    pause:"❚❚", // U+275A HEAVY VERTICAL BAR × 2
+    volOn:"🔊", // U+1F50A SPEAKER WITH THREE SOUND WAVES
+    volMute:"🔇", // U+1F507 SPEAKER WITH CANCELLATION STROKE
+  };
+
+  function fmt(t){
+    if(!isFinite(t)||t<0) t=0;
+    const m=Math.floor(t/60), s=Math.floor(t%60);
+    return m+":"+(s<10?"0":"")+s;
+  }
+
+  function syncTime(){
+    if(seeking) return;
+    const dur=mediaEl.duration;
+    const cur=mediaEl.currentTime;
+    // Update the gradient fill via the CSS var the ::-webkit-slider-runnable-track
+    // background reads. This drives the visual progress without
+    // re-rendering anything else.
+    const pct=(dur>0 && isFinite(dur)) ? (cur/dur)*100 : 0;
+    seekEl.value=pct;
+    seekEl.style.setProperty("--seek-pct", pct+"%");
+    timeEl.textContent=fmt(cur)+" / "+fmt(dur);
+  }
+
+  function setPlayIcon(playing){
+    playIcon.textContent=playing ? ICON.pause : ICON.play;
+    playBtn.setAttribute("aria-label", playing?"Pause":"Play");
+  }
+
+  function setVolIcon(muted){
+    volIcon.textContent=muted ? ICON.volMute : ICON.volOn;
+    muteBtn.setAttribute("aria-label", muted?"Unmute":"Mute");
+  }
+
+  // --- Wire the custom controls up front, BEFORE the video is ready.
+  // The buttons exist in the DOM as soon as the modal is opened;
+  // attaching click handlers here means the user can mute / scrub
+  // / fullscreen even while the first-play transcode is in progress.
+  playBtn.onclick=()=>{
+    if(mediaEl.src){
+      if(mediaEl.paused) mediaEl.play().catch(()=>{});
+      else mediaEl.pause();
+    }
+  };
+  seekEl.addEventListener("input",()=>{
+    seeking=true;
+    const dur=mediaEl.duration;
+    if(dur>0 && isFinite(dur)){
+      const t=(parseFloat(seekEl.value)/100)*dur;
+      timeEl.textContent=fmt(t)+" / "+fmt(dur);
+      seekEl.style.setProperty("--seek-pct", seekEl.value+"%");
+    }
+  });
+  seekEl.addEventListener("change",()=>{
+    const dur=mediaEl.duration;
+    if(dur>0 && isFinite(dur)){
+      mediaEl.currentTime=(parseFloat(seekEl.value)/100)*dur;
+    }
+    seeking=false;
+  });
+  // Cancel `seeking` if the user lets go of the thumb anywhere
+  // off the document, or if focus is lost mid-drag.
+  window.addEventListener("mouseup",()=>{ if(seeking) seeking=false; });
+  window.addEventListener("blur",()=>{ if(seeking) seeking=false; });
+
+  muteBtn.onclick=()=>{
+    mediaEl.muted=!mediaEl.muted;
+    setVolIcon(mediaEl.muted);
+  };
+  volEl.addEventListener("input",()=>{
+    mediaEl.volume=parseFloat(volEl.value);
+    if(mediaEl.volume>0 && mediaEl.muted){
+      mediaEl.muted=false;
+      setVolIcon(false);
+    } else if(mediaEl.volume===0 && !mediaEl.muted){
+      mediaEl.muted=true;
+      setVolIcon(true);
+    }
+  });
+  if(fsBtn){
+    fsBtn.onclick=()=>{
+      const wrap=document.getElementById("libPlayerWrap");
+      if(!wrap) return;
+      if(document.fullscreenElement) document.exitFullscreen();
+      else if(wrap.requestFullscreen) wrap.requestFullscreen();
+    };
+  }
+
+  // Keyboard shortcuts: Space toggles play/pause, M toggles mute, F
+  // toggles fullscreen. Ignore when an input is focused so we don't
+  // hijack typing in the rest of the app.
+  const onKey=(e)=>{
+    const t=e.target;
+    if(t && (t.tagName==="INPUT"||t.tagName==="TEXTAREA")) return;
+    if(e.key===" "){ e.preventDefault(); playBtn.click(); }
+    else if(e.key==="m"||e.key==="M"){ e.preventDefault(); muteBtn.click(); }
+    else if((e.key==="f"||e.key==="F") && fsBtn){ e.preventDefault(); fsBtn.click(); }
+  };
+  window.addEventListener("keydown", onKey);
+  if(ctrl) ctrl._keyHandler=onKey;
+
+  // Two paths to get the WebM:
+  //   1. Cache hit (state=cached in /transcode-status): assign the
+  //      stream URL directly to <video> and play.
+  //   2. Cache miss: poll /transcode-status which kicks off the
+  //      transcode AND reports percent. When state="cached", assign
+  //      the same URL to <video> for instant playback.
+  // In both cases the file is on disk before the <video> element starts
+  // loading, so the WebM header (including the duration) is valid and
+  // the seek bar renders correctly.
+
+  function startPlayback(){
+    if(pollTimer){clearTimeout(pollTimer); pollTimer=null;}
+    mediaEl.onerror=()=>{
+      const e=mediaEl.error;
+      console.warn("[libPlayer] media error code="+(e?e.code:"null")+" msg="+(e&&e.message));
+    };
+    mediaEl.style.display="block";
+    if(overlay) overlay.style.display="none";
+    mediaEl.src=streamUrl;
+    mediaEl.load();
+
+    // The custom-controls click handlers (play/pause/mute/volume/
+    // fullscreen/seek + keyboard shortcuts) are wired at modal-open
+    // time above so the user can interact with them even before the
+    // first-play transcode completes. Here we only need to attach
+    // the *media element* events that drive the bar from the
+    // playback head: timeupdate (4×/s while playing), loadedmetadata
+    // (so the duration is shown as soon as the WebM header parses),
+    // durationchange (rare but covers live streams), play/pause (to
+    // swap the play button glyph), and ended (to reset the icon).
+    const onPlay=()=>setPlayIcon(true);
+    const onPause=()=>setPlayIcon(false);
+    const onLoaded=()=>{
+      syncTime();
+      // Resume if autoplay was blocked.
+      mediaEl.play().catch(()=>{});
+    };
+    mediaEl.addEventListener("play", onPlay);
+    mediaEl.addEventListener("pause", onPause);
+    mediaEl.addEventListener("timeupdate", syncTime);
+    mediaEl.addEventListener("loadedmetadata", onLoaded);
+    mediaEl.addEventListener("durationchange", syncTime);
+    mediaEl.addEventListener("ended", ()=>{ syncTime(); setPlayIcon(false); });
+  }
+
+  function pollTranscodeStatus(){
+    fetch(statusUrl,{headers:{"Authorization":"Bearer "+TOKEN}})
+      .then(r=>r.ok ? r.json() : Promise.reject(new Error("HTTP "+r.status)))
+      .then(s=>{
+        if(s.state==="cached"){
+          startPlayback();
+          return;
+        }
+        // pending or transcoding -- show whatever progress we have
+        // and keep polling. 1% is the floor so the bar animates
+        // even before any bytes are written.
+        const pct=s.percent!=null ? s.percent : 1;
+        if(fill) fill.style.width=pct+"%";
+        if(pctEl) pctEl.textContent=pct+"%";
+        pollTimer=setTimeout(pollTranscodeStatus, 1000);
+      })
+      .catch(err=>{
+        console.warn("[libPlayer] status poll failed:", err);
+        pollTimer=setTimeout(pollTranscodeStatus, 2000);
+      });
+  }
+
+  // Always start by polling the status endpoint. It tells us if the
+  // cache is ready (instant play) and starts the transcode if not.
+  // No need for a separate HEAD probe.
+  pollTranscodeStatus();
 }
 
 function closeLibPlayer(){
+  // Pause and release the media element so the FFmpeg subprocess on the
+  // server side sees the client disconnect and tears down cleanly.
   const m=document.getElementById("libMedia");
-  if(m){ m.pause(); m.src=""; }
+  if(m){ m.pause(); m.removeAttribute("src"); m.load(); }
+  // Drop the keyboard shortcut listener we attached in startPlayback
+  // so it doesn't fire on a stale modal.
+  const ctrl=document.getElementById("libCtrl");
+  if(ctrl && ctrl._keyHandler) window.removeEventListener("keydown", ctrl._keyHandler);
+  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   const s=document.getElementById("libScrim");
   if(s){ s.style.opacity="0";s.style.transition="opacity .15s";setTimeout(()=>s.remove(),160); }
 }
@@ -1065,7 +1417,7 @@ function setView(v){
   document.getElementById("libFilters").style.display=isDL?"none":"";
   document.getElementById("library-view").classList.toggle("active",!isDL);
   if(isDL) render();
-  else renderLibrary();
+  else { renderLibFilters(); renderLibrary(); }
 }
 
 /* ---------- list ---------- */
@@ -1211,51 +1563,26 @@ function renderSheet(){
     if(d.state !== "completed"){
       body='<p style="font-size:12px;color:var(--muted-foreground);margin:0">Preview is available once this download finishes.</p>';
     } else if(isMediaDownload(d)){
+      // Stream the file from /stream-webm. The server transcodes H.264/AAC
+      // to VP9/Opus (WebM) on the fly so Qt WebEngine's open-source FFmpeg
+      // can decode it. Already-WebM files pass through. The same-origin
+      // cookie carries auth so the <video>/<audio> element streams
+      // directly without a JS fetch.
       const ext = (d.name.split(".").pop() || "").toLowerCase();
       const audioExts = ["mp3","wav","aac","m4a","flac","ogg"];
       const isVid = !audioExts.includes(ext);
       const tag = isVid ? "video" : "audio";
-      const mimeByExt={
-        mp4:"video/mp4", mov:"video/quicktime", webm:"video/webm",
-        mkv:"video/x-matroska", avi:"video/x-msvideo", vid:"video/mp4",
-        mp3:"audio/mpeg", wav:"audio/wav", aac:"audio/aac",
-        m4a:"audio/mp4", flac:"audio/flac", ogg:"audio/ogg",
-      };
-      const mimeType = mimeByExt[ext] || "";
-      // Use a blob URL fed by fetch() so the Authorization header is sent
-      // explicitly. Cookies work in some WebEngine configs but not all, and
-      // a <video src="..."> element can't customize its request — fetch can.
-      // FileResponse still handles HTTP Range internally for the actual bytes,
-      // so seeking works once the blob is in memory.
       const playerId="pv-"+d.id;
-      body='<div style="margin-bottom:10px">'+
-        '<'+tag+' id="'+playerId+'" controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block">'+
+      body='<'+tag+' id="'+playerId+'" controls preload="metadata" style="width:100%;max-height:340px;border-radius:6px;background:#000;display:block;margin-bottom:10px">'+
         'Your browser does not support '+tag+' playback.'+
         '</'+tag+'>'+
-      '</div>'+
-      '<p id="'+playerId+'-status" style="font-size:11.5px;color:var(--muted-foreground);margin:0 0 10px">Loading preview…</p>'+
-      '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
-      // Kick off the fetch on next tick so the DOM nodes exist first
+        '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+          '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>'+
+        '</div>';
+      // Set src on next tick so the <video>/<audio> exists in the DOM.
       setTimeout(()=>{
         const el=document.getElementById(playerId);
-        const status=document.getElementById(playerId+"-status");
-        fetch("/api/downloads/"+d.id+"/stream",{headers:{"Authorization":"Bearer "+TOKEN}})
-          .then(r=>{
-            if(!r.ok) throw new Error(r.status+" "+r.statusText);
-            return r.blob();
-          })
-          .then(blob=>{
-            const type=mimeType||blob.type||"application/octet-stream";
-            el.src=URL.createObjectURL(new Blob([blob],{type}));
-            el.load();
-            if(status) status.remove();
-          })
-          .catch(err=>{
-            if(status){
-              status.textContent="Couldn't load preview: "+err.message;
-              status.style.color="var(--destructive)";
-            }
-          });
+        if(el) el.src="/api/downloads/"+encodeURIComponent(d.id)+"/stream-webm";
       },0);
     } else {
       body='<p style="font-size:12px;color:var(--muted-foreground);margin:0 0 10px">Preview isn\'t available for this file type.</p>'+
@@ -1717,9 +2044,9 @@ function connectWS(){
       } else {
         // Library view — re-render if this item is media and might have changed state
         if(isMediaDownload(n)){
-          console.log("lib: item became media, re-rendering", n.id, n.name, n.state);
           renderLibrary();
         }
+        renderLibFilters();
         renderViewNav();
       }
     }
@@ -1744,8 +2071,10 @@ async function boot(){
     downloads = tasks.map(normalize);
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
-  // Start in downloads view (also runs the initial render)
+  // Start in downloads view. render() below ensures the library count is
+  // populated even when downloads were already completed before this session.
   setView("downloads");
+  render();
   connectWS();
   setInterval(async()=>{ try{ diskCache=await getJSON("/api/disk"); renderSystem(); }catch(_){} }, 30000);
 }

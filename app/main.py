@@ -48,6 +48,11 @@ def main() -> None:
     app.aboutToQuit.connect(api_server.stop)
 
     window = WebMainWindow(manager, f"http://127.0.0.1:{api_server.port}/")
+    # Let the API server ask the window to open a completed file in the
+    # native OS media player. The callback runs on the Qt main thread via
+    # the server's MainThreadExecutor, so it is safe to construct QWidgets
+    # inside.
+    api_server.set_native_player_opener(window.open_native_player)
     window.show()
 
     tray = TrayController(window, manager)  # noqa: F841 -- keeps the tray icon alive

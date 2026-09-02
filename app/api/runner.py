@@ -38,10 +38,18 @@ class ApiServer:
         self.token = secrets.token_urlsafe(32)
         self.port = API_PORT
         self.executor = MainThreadExecutor()
+        # Optional callback registered by the UI (WebMainWindow) to open a
+        # completed file in the native OS media player. Lives on the Qt main
+        # thread -- the API endpoint routes through self.executor.call() so
+        # invocations land there.
+        self._native_player_opener = None
 
         self._loop = asyncio.new_event_loop()
         self.broadcaster = EventBroadcaster(self._loop)
-        app = create_app(manager, self.executor, self.broadcaster, settings_path, self.token, APP_DATA_DIR)
+        app = create_app(
+            manager, self.executor, self.broadcaster, settings_path, self.token, APP_DATA_DIR,
+            get_native_player_opener=lambda: self._native_player_opener,
+        )
         config = uvicorn.Config(app, host="127.0.0.1", port=self.port, loop="none", log_level="warning")
         self._server = uvicorn.Server(config)
 
@@ -64,6 +72,16 @@ class ApiServer:
         while not self._server.started and time.monotonic() < deadline:
             time.sleep(0.005)
 
+    def set_native_player_opener(self, opener) -> None:
+        """Register a callback that opens a completed file in the native player.
+
+        The callback must be safe to invoke on the Qt main thread (it is
+        routed through the executor). WebMainWindow registers its own
+        _open_native_player method here so the API endpoint can hand off
+        playback without needing a custom URL scheme.
+        """
+        self._native_player_opener = opener
+
     def stop(self) -> None:
         self._loop.call_soon_threadsafe(setattr, self._server, "should_exit", True)
         self._thread.join(timeout=2)
@@ -73,14 +91,29 @@ class ApiServer:
         self._loop.run_until_complete(self._server.serve())
 
     def _on_task_added(self, task_id: str) -> None:
-        task = self.manager.tasks.get(task_id)
-        if task is not None:
-            self.broadcaster.publish({"type": "added", "download": DownloadOut.from_task(task).model_dump()})
+        try:
+            task = self.manager.tasks.get(task_id)
+            if task is not None:
+                self.broadcaster.publish({"type": "added", "download": DownloadOut.from_task(task).model_dump()})
+        except Exception:
+            # Slot must never raise: an exception escaping a Qt slot crosses
+            # into C++ qt_metacall which has no place to put it, and Qt's
+            # policy is qFatal() -> abort(). Swallow + log instead.
+            import traceback
+            print("FlowDownload: _on_task_added swallowed exception:", traceback.format_exc(), flush=True)
 
     def _on_task_changed(self, task_id: str) -> None:
-        task = self.manager.tasks.get(task_id)
-        if task is not None:
-            self.broadcaster.publish({"type": "updated", "download": DownloadOut.from_task(task).model_dump()})
+        try:
+            task = self.manager.tasks.get(task_id)
+            if task is not None:
+                self.broadcaster.publish({"type": "updated", "download": DownloadOut.from_task(task).model_dump()})
+        except Exception:
+            import traceback
+            print("FlowDownload: _on_task_changed swallowed exception:", traceback.format_exc(), flush=True)
 
     def _on_task_removed(self, task_id: str) -> None:
-        self.broadcaster.publish({"type": "removed", "id": task_id})
+        try:
+            self.broadcaster.publish({"type": "removed", "id": task_id})
+        except Exception:
+            import traceback
+            print("FlowDownload: _on_task_removed swallowed exception:", traceback.format_exc(), flush=True)

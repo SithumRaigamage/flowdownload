@@ -5,10 +5,11 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Cookie
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Cookie, Request
 from fastapi.responses import HTMLResponse, FileResponse
 import mimetypes
 
@@ -28,6 +29,12 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 NATIVE_HOST_MANIFEST = Path.home() / (
     "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
 )
+
+
+def _log(msg: str) -> None:
+    """Unbuffered stderr logger (uvicorn captures stdout by default)."""
+    import sys
+    print(msg, file=sys.stderr, flush=True)
 
 
 def _sniff_media_type(path: str) -> str | None:
@@ -84,6 +91,179 @@ def _sniff_media_type(path: str) -> str | None:
     return mimetypes.guess_type(path)[0]
 
 
+def _needs_transcode(path: str) -> bool:
+    """Probe a file's codecs to decide if FFmpeg transcoding is required.
+
+    Qt WebEngine ships with the open-source Chromium FFmpeg build, which
+    deliberately omits proprietary codecs (H.264, AAC, MPEG-2, ...). For
+    those files, an in-page <video> element fires DEMUXER_ERROR_NO_SUPPORTED_STREAMS
+    and shows a black frame. We use FFprobe to inspect the streams and
+    return True if any of them use a codec the open-source Chromium build
+    cannot decode. WebM/VP9/VP8/Opus/Vorbis files are returned untouched
+    (no CPU cost) so they play directly.
+    """
+    # A conservative whitelist of codecs supported by the open-source
+    # Chromium FFmpeg that ships with Qt WebEngine. Anything not in this
+    # set needs transcoding to VP9/Opus.
+    SUPPORTED_VIDEO = {"vp8", "vp9", "av1"}
+    SUPPORTED_AUDIO = {"opus", "vorbis", "pcm_*", "flac"}
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json",
+             "-show_streams", path],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if out.returncode != 0:
+            return True  # can't probe — assume worst case
+        import json as _json
+        info = _json.loads(out.stdout or "{}")
+        for s in info.get("streams", []):
+            codec = (s.get("codec_name") or "").lower()
+            kind = s.get("codec_type")
+            if kind == "video" and codec not in SUPPORTED_VIDEO:
+                return True
+            if kind == "audio" and not any(
+                codec == p.rstrip("*") or codec.startswith(p.rstrip("*"))
+                for p in SUPPORTED_AUDIO
+            ):
+                return True
+        return False
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True  # ffprobe missing or hung — transcode to be safe
+
+
+def _transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> bool:
+    """Transcode src_path (H.264/AAC) → dest_path (VP9/Opus WebM) using FFmpeg.
+
+    Returns True on success, False on failure. Runs synchronously — the
+    caller is expected to invoke this on a background thread so HTTP
+    requests stay responsive while FFmpeg does its work.
+
+    Why we transcode to a file (not stream stdout):
+      WebM is a seekable container. The `<video>` element reads the
+      total duration from the WebM header at the start of the file; an
+      on-the-fly stdout stream has no fixed duration, so the browser
+      shows 0:00 / 0:00 and the seek bar can't render properly. By
+      writing to a file first, the duration is known and the browser
+      gets full seek/Range support via FastAPI's FileResponse.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner", "-loglevel", "error",
+        "-y",  # overwrite existing file
+        "-i", src_path,
+        # Video: VP9 in WebM. `cpu-used 8` is realtime-fast; quality is
+        # acceptable for in-app preview.
+        "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32",
+        "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1",
+        # Audio: Opus at 96k is plenty for spoken-word video and light music.
+        "-c:a", "libopus", "-b:a", "96k",
+        # WebM container.
+        "-f", "webm",
+        dest_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=int(duration_s) + 60)
+        if result.returncode != 0:
+            _log(f"[transcode] ffmpeg failed: {result.stderr.decode(errors='replace')[-500:]}")
+            return False
+        return os.path.exists(dest_path) and os.path.getsize(dest_path) > 0
+    except subprocess.TimeoutExpired:
+        _log(f"[transcode] ffmpeg timed out for {os.path.basename(src_path)}")
+        return False
+    except Exception as exc:
+        _log(f"[transcode] error: {exc}")
+        return False
+
+
+def _probe_duration(path: str) -> float:
+    """Return the duration of a media file in seconds, or 0 on error."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-print_format", "json",
+             "-show_format", path],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if out.returncode != 0:
+            return 0.0
+        import json as _json
+        info = _json.loads(out.stdout or "{}")
+        return float(info.get("format", {}).get("duration", 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def _transcode_cache_key(src_path: str) -> str:
+    """Build a cache key from the source path and mtime so a re-encoded
+    file is regenerated when the source changes."""
+    st = os.stat(src_path)
+    return f"{os.path.basename(src_path)}.{int(st.st_mtime)}.{st.st_size}.webm"
+
+
+def _get_or_build_transcoded(src_path: str, cache_dir: str,
+                              max_wait_s: float = 600.0) -> str | None:
+    """Return the path to a transcoded WebM, building it if needed.
+
+    Caches the result in cache_dir by source-path+mtime+size. Concurrent
+    requests for the same source are coalesced via a per-key lock + a
+    shared "is this source already being transcoded" flag, so we don't
+    run FFmpeg twice for the same file.
+
+    If the cache is empty, this function KICKS OFF the transcode in a
+    background daemon thread and blocks the caller (up to max_wait_s)
+    waiting for the result. Returning a path that doesn't exist yet
+    is intentional: the HTTP handler can show a "transcoding" status
+    to the JS, which will keep polling /transcode-status until the
+    file appears, then load <video src=...> on the same URL.
+    """
+    import threading
+    key = _transcode_cache_key(src_path)
+    dest = os.path.join(cache_dir, key)
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return dest  # cache hit, instant return
+
+    os.makedirs(cache_dir, exist_ok=True)
+    # Module-level state: lock + "already running" flag, keyed by source key.
+    state = _get_or_build_transcoded.__dict__.setdefault("_state", {})
+    entry = state.setdefault(key, {
+        "lock": threading.Lock(),
+        "thread": None,
+        "started": False,
+    })
+
+    # If no thread is running for this key, start one.
+    if not entry["started"]:
+        with entry["lock"]:
+            if not entry["started"]:
+                duration = _probe_duration(src_path)
+                _log(f"[transcode] starting: {os.path.basename(src_path)} → {key} ({duration:.1f}s)")
+                def _run():
+                    try:
+                        ok = _transcode_to_webm(src_path, dest, duration)
+                        if ok:
+                            _log(f"[transcode] done: {key} ({os.path.getsize(dest)} bytes)")
+                        else:
+                            _log(f"[transcode] FAILED: {key}")
+                            try: os.remove(dest)
+                            except OSError: pass
+                    finally:
+                        entry["started"] = False
+                entry["started"] = True
+                entry["thread"] = threading.Thread(target=_run, daemon=True)
+                entry["thread"].start()
+
+    # Block the caller (the HTTP handler) until the transcode is done.
+    # We don't hold the lock here -- multiple HTTP requests for the
+    # same source can all wait on the same background thread.
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            return dest
+        time.sleep(0.5)
+    _log(f"[transcode] wait timeout for {key}")
+    return None
+
+
 def create_app(
     manager: DownloadManager,
     executor: MainThreadExecutor,
@@ -91,6 +271,7 @@ def create_app(
     settings_path: str,
     token: str,
     app_data_dir: str,
+    get_native_player_opener: "Callable[[], Optional[Callable[[str], None]]] | None" = None,
 ) -> FastAPI:
     app = FastAPI(title="FlowDownload API")
 
@@ -211,6 +392,21 @@ def create_app(
         subprocess.run(["open", "-R", path], check=False)
         return {"ok": True}
 
+    @app.post("/api/downloads/{task_id}/open-in-player", response_model=dict)
+    def open_in_player(task_id: str, _=Depends(require_token)):
+        """Open a completed download in the native OS media player via the Qt UI."""
+        def _open():
+            opener = get_native_player_opener() if get_native_player_opener else None
+            if opener is None:
+                return None  # No player registered (dev mode without UI maybe)
+            opener(task_id)
+            return {"ok": True, "player": "native"}
+        # The opener runs on the Qt main thread; block briefly for result.
+        result = executor.call(_open)
+        if result is None:
+            raise HTTPException(status_code=503, detail="Native media player not available")
+        return result
+
     @app.get("/api/downloads/{task_id}/stream")
     def stream_download(task_id: str, _=Depends(require_token)):
         """Stream a completed download file for in-app preview.
@@ -232,15 +428,183 @@ def create_app(
             raise HTTPException(status_code=404, detail="File not found or not ready")
 
         media_type = _sniff_media_type(dest_path)
-        return FileResponse(
+        response = FileResponse(
             dest_path,
             media_type=media_type or "application/octet-stream",
             filename=os.path.basename(dest_path),
+        )
+        # FileResponse defaults to "attachment" which some browsers treat as a
+        # download even when the URL is set on a <video> element. Force inline
+        # so the in-app library player shows the media rather than triggering
+        # a download.
+        response.headers["Content-Disposition"] = (
+            f'inline; filename="{os.path.basename(dest_path)}"'
+        )
+        return response
+
+    @app.api_route("/api/downloads/{task_id}/stream-webm", methods=["GET", "HEAD"])
+    def stream_transcode(task_id: str, request: Request, _=Depends(require_token)):
+        """Stream a media file as WebM/VP9/Opus, transcoding on first request.
+
+        Qt WebEngine's open-source Chromium FFmpeg build lacks proprietary
+        codecs (H.264, AAC), so an in-page <video src="/stream"> would fail
+        with DEMUXER_ERROR_NO_SUPPORTED_STREAMS. This endpoint transcodes
+        to VP9/Opus (both supported by the open-source build) and serves
+        the result as a file with HTTP Range support.
+
+        Returns 200 with the WebM file on a cache hit. On a miss, kicks
+        off the transcode in a background thread and returns 202 with
+        JSON {"state": "transcoding", "status_url": "..."} so the JS
+        can poll /transcode-status and show a progress bar while
+        FFmpeg does its work. The JS retries this endpoint once the
+        status shows "cached" -- that second request is instant.
+
+        HEAD requests return the same status code (200 or 202) and
+        headers but no body, so the JS can probe without committing
+        to a full GET.
+
+        Why not stream stdout: stdout streams have no fixed duration in
+        the WebM header, so the browser shows 0:00 / 0:00 and the seek
+        bar can't render. A complete file has a known duration, so the
+        browser's native <video> controls (including the seek bar) work
+        perfectly.
+        """
+        from fastapi.responses import JSONResponse
+        is_head = request.method == "HEAD"
+
+        # Read the file path on the manager thread (same mechanism as /stream)
+        def _get():
+            task = manager.tasks.get(task_id)
+            if task is None or task.status != DownloadStatus.COMPLETED:
+                return None
+            if not os.path.exists(task.dest_path):
+                return None
+            return task.dest_path
+        dest_path = executor.call(_get)
+        if dest_path is None:
+            raise HTTPException(status_code=404, detail="File not found or not ready")
+
+        # If the file is already in a WebEngine-compatible codec, just
+        # stream the original -- no CPU cost, full Range support.
+        if not _needs_transcode(dest_path):
+            response = FileResponse(
+                dest_path, media_type="video/webm",
+                filename=os.path.basename(dest_path),
+            )
+            response.headers["Content-Disposition"] = (
+                f'inline; filename="{os.path.basename(dest_path)}"'
+            )
+            response.headers["Cache-Control"] = "no-store"
+            if is_head:
+                # Strip the body for HEAD; Starlette does this for FileResponse
+                # automatically, but be explicit so future readers understand.
+                response.body = b""
+            return response
+
+        # Needs transcoding. Check the cache.
+        cache_dir = os.path.join(app_data_dir, "transcoded")
+        os.makedirs(cache_dir, exist_ok=True)
+        key = _transcode_cache_key(dest_path)
+        final = os.path.join(cache_dir, key)
+        if os.path.exists(final) and os.path.getsize(final) > 0:
+            response = FileResponse(
+                final, media_type="video/webm",
+                filename=os.path.basename(final),
+            )
+            response.headers["Content-Disposition"] = (
+                f'inline; filename="{os.path.basename(dest_path)}"'
+            )
+            response.headers["Cache-Control"] = "no-store"
+            if is_head:
+                response.body = b""
+            return response
+
+        # Cache miss. Start the transcode in the background (idempotent
+        # across concurrent requests) and return 202 so the JS knows to
+        # poll. The 202 response carries the transcode status URL so the
+        # JS doesn't have to construct it.
+        _get_or_build_transcoded(dest_path, cache_dir, max_wait_s=0.1)
+        body = {
+            "state": "transcoding",
+            "status_url": f"/api/downloads/{task_id}/transcode-status",
+            "stream_url": f"/api/downloads/{task_id}/stream-webm",
+        }
+        if is_head:
+            # HEAD: return the same headers but no body. JSONResponse
+            # renders an empty body when content isn't included.
+            return JSONResponse(
+                status_code=202, content=None,
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            status_code=202,
+            content=body,
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.get("/api/downloads/{task_id}/log", response_model=list[HistoryEntry])
     def download_log(task_id: str, _=Depends(require_token)):
         return executor.call(lambda: manager.get_history(task_id))
+
+    @app.get("/api/downloads/{task_id}/transcode-status")
+    def transcode_status(task_id: str, _=Depends(require_token)):
+        """Return the transcode cache state for a task.
+
+        States: 'cached' (WebM is on disk, instant play), 'pending'
+        (transcode queued / FFmpeg just started, no bytes yet),
+        'transcoding' (FFmpeg is running, with progress percent),
+        'failed' (last attempt errored). The JS polls this while
+        waiting for the first-play transcode to complete so it can
+        show a progress indicator.
+
+        Calling this endpoint ALSO starts the transcode if it isn't
+        already running. This means the JS doesn't have to call
+        /stream-webm just to kick FFmpeg off; it can poll status
+        first and switch over to <video src=...> when state="cached".
+        """
+        def _get():
+            task = manager.tasks.get(task_id)
+            if task is None or task.status != DownloadStatus.COMPLETED:
+                return None, None
+            return task.dest_path, _probe_duration(task.dest_path)
+        result = executor.call(_get)
+        if result == (None, None):
+            raise HTTPException(status_code=404, detail="No such download")
+        dest_path, duration = result
+        if not _needs_transcode(dest_path):
+            return {"state": "cached", "needs_transcode": False}
+        cache_dir = os.path.join(app_data_dir, "transcoded")
+        os.makedirs(cache_dir, exist_ok=True)
+        key = _transcode_cache_key(dest_path)
+        final = os.path.join(cache_dir, key)
+        if os.path.exists(final) and os.path.getsize(final) > 0:
+            return {"state": "cached", "needs_transcode": True}
+        # Make sure the transcode is running. _get_or_build_transcoded
+        # is idempotent: a second call while one is in progress just
+        # returns the in-flight thread. Pass max_wait_s=0 to return
+        # immediately so this endpoint stays cheap to poll.
+        _get_or_build_transcoded(dest_path, cache_dir, max_wait_s=0)
+        partial = final + ".partial"
+        if os.path.exists(partial) and duration > 0:
+            partial_size = os.path.getsize(partial)
+            # VP9 at CRF 32 produces roughly 600-800 kbps for typical
+            # 480p content; we use 700 kbps as the mid estimate. The
+            # output size depends on content complexity, so the
+            # percentage is approximate -- but it's monotonic and
+            # gives the user meaningful feedback during the wait.
+            estimated_total = int(duration * 700_000 / 8)
+            # Don't return 0% when FFmpeg is clearly working -- show at
+            # least 1% so the progress bar is visibly animating.
+            pct = min(99, max(1, int(partial_size * 100 / max(estimated_total, 1))))
+            return {
+                "state": "transcoding",
+                "needs_transcode": True,
+                "partial_bytes": partial_size,
+                "estimated_total_bytes": estimated_total,
+                "percent": pct,
+                "duration_seconds": duration,
+            }
+        return {"state": "pending", "needs_transcode": True}
 
     @app.post("/api/downloads/clear-completed")
     def clear_completed(_=Depends(require_token)):

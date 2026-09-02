@@ -5,5 +5,7 @@ downloads.db
 *.part
 .DS_Store
 dist/
+build/
+app/AppIcon.iconset/
 
 .claude/
