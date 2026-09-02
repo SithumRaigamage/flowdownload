@@ -584,22 +584,24 @@ def create_app(
         # returns the in-flight thread. Pass max_wait_s=0 to return
         # immediately so this endpoint stays cheap to poll.
         _get_or_build_transcoded(dest_path, cache_dir, max_wait_s=0)
-        partial = final + ".partial"
-        if os.path.exists(partial) and duration > 0:
-            partial_size = os.path.getsize(partial)
+        if os.path.exists(final) and duration > 0:
+            final_size = os.path.getsize(final)
             # VP9 at CRF 32 produces roughly 600-800 kbps for typical
             # 480p content; we use 700 kbps as the mid estimate. The
             # output size depends on content complexity, so the
             # percentage is approximate -- but it's monotonic and
             # gives the user meaningful feedback during the wait.
             estimated_total = int(duration * 700_000 / 8)
+            if final_size >= estimated_total:
+                # FFmpeg finished; the file is ready.
+                return {"state": "cached", "needs_transcode": True}
             # Don't return 0% when FFmpeg is clearly working -- show at
             # least 1% so the progress bar is visibly animating.
-            pct = min(99, max(1, int(partial_size * 100 / max(estimated_total, 1))))
+            pct = min(99, max(1, int(final_size * 100 / max(estimated_total, 1))))
             return {
                 "state": "transcoding",
                 "needs_transcode": True,
-                "partial_bytes": partial_size,
+                "partial_bytes": final_size,
                 "estimated_total_bytes": estimated_total,
                 "percent": pct,
                 "duration_seconds": duration,
