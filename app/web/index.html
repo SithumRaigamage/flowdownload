@@ -177,9 +177,12 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .switch[aria-checked="true"]{background:var(--primary)}
 .switch[aria-checked="true"]::after{transform:translateX(15px)}
 
-.checkbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--input);background:var(--card);flex:none;display:grid;place-items:center;transition:background .12s,border-color .12s}
+.checkbox{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--input);background:var(--card);flex:none;display:grid;place-items:center;transition:background .12s,border-color .12s;pointer-events:none}
 .checkbox[aria-checked="true"]{background:var(--primary);border-color:var(--primary)}
 .checkbox[aria-checked="true"]::after{content:"";width:8px;height:5px;border:1.8px solid var(--primary-foreground);border-top:0;border-right:0;transform:rotate(-45deg) translateY(-1px)}
+.checkbox[data-indeterminate="true"]{background:var(--primary);border-color:var(--primary)}
+.checkbox[data-indeterminate="true"]::after{content:"";width:8px;height:1.8px;border:none;background:var(--primary-foreground);transform:none}
+.cb{width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
 
 .kbd{display:inline-block;min-width:17px;padding:1px 5px;border-radius:4px;border:1px solid var(--border);
   background:var(--muted);font-size:10.5px;font-family:"SF Mono",ui-monospace,monospace;color:var(--muted-foreground);text-align:center}
@@ -253,6 +256,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .bulkbar{display:flex;align-items:center;gap:8px;padding:7px 12px;
   border-bottom:1px solid transparent;font-size:12.5px;flex:none}
 .bulkbar b{font-weight:600}
+.bulkbar[data-has-selection="false"] [data-bulk]:not([data-bulk="all"]){pointer-events:none;opacity:.4}
 
 /* ---------- list ---------- */
 .list{flex:1;overflow-y:auto;padding:6px;position:relative}
@@ -757,7 +761,8 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
       </div>
 
       <div class="bulkbar glass hidden" id="bulkbar">
-        <b id="bulkCount">0 selected</b>
+        <span class="cb" role="checkbox" id="selectAllCb" data-bulk="all" aria-label="Select all"><i class="checkbox"></i></span>
+        <b id="bulkCount">Select all</b>
         <div class="tb-sep"></div>
         <button class="btn btn-sm btn-ghost" data-bulk="resume">Resume</button>
         <button class="btn btn-sm btn-ghost" data-bulk="pause">Pause</button>
@@ -1487,7 +1492,7 @@ function renderList(){
     const showBar = d.state!=="completed";
     const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
     return '<div class="row" data-id="'+d.id+'" data-selected="'+sel+'" data-active="'+(ui.activeId===d.id)+'" tabindex="0">'+
-      '<span class="checkbox cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" aria-label="Select '+esc(d.name)+'"></span>'+
+      '<span class="cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" aria-label="Select '+esc(d.name)+'"><i class="checkbox" aria-checked="'+sel+'"></i></span>'+
       '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
       '<div class="rmain">'+
         '<div class="rtop"><span class="fname">'+esc(d.name)+'</span>'+
@@ -1639,8 +1644,17 @@ function renderStats(){
 
 function renderBulk(){
   const bar=document.getElementById("bulkbar");
-  bar.classList.toggle("hidden", ui.selected.size===0);
-  document.getElementById("bulkCount").textContent=ui.selected.size+" selected";
+  const items=visible();
+  bar.classList.toggle("hidden", items.length===0);
+  bar.dataset.hasSelection = ui.selected.size>0;
+  document.getElementById("bulkCount").textContent = ui.selected.size>0 ? ui.selected.size+" selected" : "Select all";
+  const allSelected = items.length>0 && items.every(d=>ui.selected.has(d.id));
+  const someSelected = ui.selected.size>0 && !allSelected;
+  const outer=document.getElementById("selectAllCb");
+  outer.setAttribute("aria-checked", someSelected ? "mixed" : String(allSelected));
+  const inner=outer.querySelector(".checkbox");
+  inner.setAttribute("aria-checked", allSelected);
+  inner.toggleAttribute("data-indeterminate", someSelected);
 }
 
 function render(){
@@ -1781,10 +1795,19 @@ document.getElementById("viewNav").addEventListener("click",e=>{
   setView(btn.dataset.view);
 });
 
+function toggleSelectAll(){
+  const ids=visible().map(d=>d.id);
+  const allSelected = ids.length>0 && ids.every(id=>ui.selected.has(id));
+  ui.selected = allSelected ? new Set() : new Set(ids);
+  render();
+}
+
 document.getElementById("bulkbar").addEventListener("click",async e=>{
   const b=e.target.closest("[data-bulk]"); if(!b) return;
   const w=b.dataset.bulk;
+  if(w==="all"){ toggleSelectAll(); return; }
   if(w==="clear"){ ui.selected.clear(); render(); return; }
+  if(ui.selected.size===0) return;
   const ids=[...ui.selected];
   try{
     if(w==="pause") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/pause")));
@@ -1961,7 +1984,7 @@ async function settingsDialog(){
 }
 
 function shortcutsDialog(){
-  const rows=[["Downloads",""],["Add a download","⌘N"],["Search","⌘F"],["Pause or resume selection","Space"],
+  const rows=[["Downloads",""],["Add a download","⌘N"],["Search","⌘F"],["Select all","⌘A"],["Pause or resume selection","Space"],
     ["Remove from list","⌘⌫"],
     ["View",""],["Show details","↵"],["Toggle appearance","⌘⇧L"],["Settings","⌘,"],["Shortcuts","⌘/"]];
   overlay('<div class="dialog" style="max-width:380px" role="dialog" aria-modal="true"><div class="dialog-head"><h2>Keyboard shortcuts</h2></div>'+
@@ -1990,6 +2013,7 @@ document.addEventListener("keydown",e=>{
   if(meta&&e.key==="/"){ e.preventDefault(); shortcutsDialog(); return; }
   if(meta&&e.shiftKey&&e.key.toLowerCase()==="l"){ e.preventDefault(); document.documentElement.classList.toggle("dark"); return; }
   if(typing) return;
+  if(meta&&e.key.toLowerCase()==="a"&&ui.view==="downloads"){ e.preventDefault(); toggleSelectAll(); return; }
   if(e.key===" "&&ui.activeId){ e.preventDefault();
     const d=downloads.find(x=>x.id===ui.activeId);
     if(d) act(d.id, d.state==="downloading"||d.state==="retrying"?"pause":"resume"); }
