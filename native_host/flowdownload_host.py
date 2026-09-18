@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -25,7 +26,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from app.engine.instance_lock import InstanceLock  # noqa: E402
 from app.engine.models import DownloadStatus, DownloadTask  # noqa: E402
 from app.engine.paths import dedupe_path  # noqa: E402
-from app.engine.probe import guess_filename_from_url  # noqa: E402
+from app.engine.probe import guess_filename_from_url, validate_download_url  # noqa: E402
 from app.engine.settings import Settings  # noqa: E402
 from app.engine.storage import Storage  # noqa: E402
 
@@ -138,6 +139,10 @@ def handle_message(message: dict) -> dict:
     url = message.get("url")
     if not url:
         return {"ok": False, "error": "missing url"}
+    try:
+        validate_download_url(url)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
     _write_extension_state(profile_id, profile_name)
 
@@ -201,7 +206,20 @@ def handle_message(message: dict) -> dict:
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
         status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",
     )
-    storage.save(task)
+    # This process's reserved-set snapshot and the running app's aren't
+    # coordinated -- storage's UNIQUE index on dest_path turns a same-instant
+    # collision into an IntegrityError instead of two tasks sharing a file.
+    # See the matching retry in DownloadManager.add_download.
+    for _ in range(20):
+        try:
+            storage.save(task)
+            break
+        except sqlite3.IntegrityError:
+            reserved.add(task.dest_path)
+            task.dest_path = dedupe_path(dest_path, reserved)
+            task.filename = os.path.basename(task.dest_path)
+    else:
+        return {"ok": False, "error": "could not find a free filename"}
 
     launch_app_if_needed()
     response = {"ok": True, "filename": task.filename}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 from urllib.parse import unquote, urlparse
@@ -10,6 +11,38 @@ _FILENAME_STAR_RE = re.compile(r"filename\*=(?:UTF-8'')?\"?([^\";]+)\"?", re.IGN
 _FILENAME_RE = re.compile(r'filename="?([^";]+)"?', re.IGNORECASE)
 
 PROBE_TIMEOUT = 5
+
+# 169.254.0.0/16 is where every major cloud provider (AWS, GCP, Azure,
+# DigitalOcean, ...) serves instance credentials from -- there's no
+# legitimate reason a download URL would point there. Deliberately not
+# blocking all of RFC1918/loopback: downloading from a device on the
+# user's own LAN (a home NAS, a local dev server) is a normal use of a
+# download manager, so only this specific metadata range is rejected.
+_BLOCKED_NETWORKS = (ipaddress.ip_network("169.254.0.0/16"),)
+
+
+def validate_download_url(url: str) -> None:
+    """Reject URLs that are obvious SSRF bait, before anything fetches them.
+
+    Raises ValueError (caller turns it into a user-facing error) on
+    rejection. Only catches an IP literal in the blocked range -- a
+    hostname that *resolves* to one isn't pinned/re-checked here, since
+    doing that safely needs resolving the host and connecting to the
+    resolved address directly (not just re-resolving at request time,
+    which a malicious DNS server could answer differently for).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http:// and https:// links are supported")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host")
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return  # a hostname, not an IP literal -- nothing more to check here
+    if any(addr in net for net in _BLOCKED_NETWORKS):
+        raise ValueError("This host can't be downloaded from")
 
 
 def guess_filename_from_url(url: str) -> str:
@@ -33,6 +66,7 @@ def probe_remote_filename(url: str) -> str | None:
     has a URL-based guess to fall back to.
     """
     try:
+        validate_download_url(url)
         response = requests.head(url, allow_redirects=True, timeout=PROBE_TIMEOUT)
         if "Content-Disposition" not in response.headers:
             # Some servers don't implement HEAD properly; try a minimal ranged
@@ -43,5 +77,5 @@ def probe_remote_filename(url: str) -> str | None:
             )
             response.close()
         return parse_content_disposition_filename(response.headers.get("Content-Disposition", ""))
-    except requests.exceptions.RequestException:
+    except (requests.exceptions.RequestException, ValueError):
         return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -11,6 +12,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
 from app.engine.paths import dedupe_path
+from app.engine.probe import validate_download_url
 from app.engine.settings import Settings
 from app.engine.storage import Storage
 
@@ -109,7 +111,18 @@ class DownloadManager(QObject):
     def get_history(self, task_id: str) -> list[dict]:
         return list(self.history.get(task_id, []))
 
-    def add_download(self, url: str, dest_path: str) -> str:
+    def add_download(self, url: str, filename: str) -> str:
+        validate_download_url(url)
+
+        # Only the filename is trusted from the caller -- the destination
+        # directory is always settings.download_dir, never client-supplied,
+        # so a crafted filename (e.g. "../../Library/LaunchAgents/x.plist")
+        # can't escape the download folder. Mirrors native_host.py, which
+        # applies the same os.path.basename() boundary for the Chrome
+        # extension hand-off.
+        filename = os.path.basename(filename) or "download"
+        dest_path = os.path.join(self.settings.download_dir, filename)
+
         # Read from storage rather than self.tasks: a download the Chrome
         # extension just queued via the native host lands in storage
         # immediately but isn't polled into self.tasks for up to
@@ -139,8 +152,24 @@ class DownloadManager(QObject):
             url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
             status=DownloadStatus.QUEUED,
         )
+        # The reserved-set check above and this save aren't atomic across
+        # processes -- the native host (a separate process) could insert a
+        # row claiming the same dest_path in between. storage's UNIQUE
+        # index on dest_path turns that into an IntegrityError here rather
+        # than two tasks silently sharing a file; retry against a freshly
+        # renamed path the same way dedupe_path would have if it had seen
+        # the other process's row in time.
+        for _ in range(20):
+            try:
+                self.storage.save(task)
+                break
+            except sqlite3.IntegrityError:
+                reserved.add(task.dest_path)
+                task.dest_path = dedupe_path(dest_path, reserved)
+                task.filename = os.path.basename(task.dest_path)
+        else:
+            raise RuntimeError("Could not find a free filename after 20 attempts")
         self.tasks[task.id] = task
-        self.storage.save(task)
         self._log(task.id, "info", "Added to queue")
         self.task_added.emit(task.id)
         self._dispatch_queue()
@@ -306,6 +335,7 @@ class DownloadManager(QObject):
         worker.status_changed.connect(self._on_status_changed)
         worker.metadata_resolved.connect(self._on_metadata_resolved)
         worker.digest_computed.connect(self._on_digest_computed)
+        worker.size_unverified.connect(self._on_size_unverified)
         worker.finished.connect(lambda tid=task_id: self._on_worker_finished(tid))
         self._workers[task_id] = worker
         worker.start()
@@ -397,30 +427,47 @@ class DownloadManager(QObject):
         if task.status in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
             self.task_finished.emit(task_id, status_value)
 
-    def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool) -> None:
+    def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool | None) -> None:
         """Persist the worker-computed SHA-256 and the verification badge.
 
-        `verified` is True only when the server advertised a Digest header
-        (RFC 9530) and the value matched what we computed. Most servers
-        don't send Digest, so verified=False is the common, expected case —
-        not an error. The UI uses this to decide whether to draw the
-        "verified" badge or leave the digest unbadged.
+        `verified` is a three-way result from the worker: True only when
+        the server advertised a Digest header (RFC 9530) and it matched
+        what we computed; None when the server sent no header at all (most
+        don't -- the common, expected case, not an error); False when it
+        DID send one and it didn't match -- a real integrity failure. The
+        stored `digest_verified` bool collapses None/False to False (the
+        "verified" badge should only ever mean a confirmed match), but the
+        log -- which is what a user actually sees -- keeps the two apart,
+        since a mismatch means something is genuinely wrong with the file.
         """
         try:
             task = self.tasks.get(task_id)
             if task is None:
                 return
             task.digest_sha256 = digest_sha256
-            task.digest_verified = verified
+            task.digest_verified = bool(verified)
             task.updated_at = time.time()
             self.storage.save(task)
-            if verified:
+            if verified is True:
                 self._log(task_id, "ok", f"Verified: SHA-256 {digest_sha256[:12]}…")
+            elif verified is False:
+                self._log(
+                    task_id, "error",
+                    f"Integrity check FAILED: SHA-256 {digest_sha256[:12]}… does not match the "
+                    "server's Digest header — the file may be corrupted or altered in transit",
+                )
             else:
                 self._log(task_id, "info", f"SHA-256 {digest_sha256[:12]}… (no server Digest to verify against)")
             self.task_updated.emit(task_id)
         except Exception as exc:
             self._log(task_id, "error", f"digest handler error: {exc}")
+
+    def _on_size_unverified(self, task_id: str) -> None:
+        self._log(
+            task_id, "warn",
+            "Size not verified — the server didn't report a length, so a truncated "
+            "transfer can't be told apart from a complete one for this file",
+        )
 
     def check_dedupe(self, url: str) -> DedupeResult:
         """Check whether a URL is already represented in our completed history.
@@ -474,3 +521,29 @@ def apply_auto_folder_for_path(filename: str, base_dir: str) -> str:
     else:
         sub = "Other"
     return os.path.join(base_dir, sub, filename)
+
+
+_AUTO_FOLDER_SUBDIRS = {"Video", "Audio", "Documents", "Archives", "Other"}
+
+
+def prune_empty_auto_folder_dir(dest_path: str, download_dir: str) -> None:
+    """Remove the auto-folder subfolder (Video/Audio/.../Other) a just-
+    deleted file lived in, if that was the last thing in it.
+
+    apply_auto_folder_for_path creates these on demand but nothing ever
+    cleaned one up, so a download folder accumulates empty Video/Audio/...
+    directories forever as files move through it. Deliberately narrow: only
+    touches a directory whose name is one of the fixed auto-folder names
+    and whose *parent* is exactly download_dir, and os.rmdir refuses to
+    remove a non-empty directory -- so this can never reach outside that
+    known structure or delete anything that still has content.
+    """
+    parent = os.path.dirname(dest_path)
+    if os.path.basename(parent) not in _AUTO_FOLDER_SUBDIRS:
+        return
+    if os.path.dirname(parent) != os.path.normpath(download_dir):
+        return
+    try:
+        os.rmdir(parent)
+    except OSError:
+        pass  # not empty, or already gone -- either way, nothing to do

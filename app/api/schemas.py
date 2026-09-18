@@ -79,7 +79,10 @@ class PickFolderResponse(BaseModel):
 
 class NewDownloadRequest(BaseModel):
     url: str
-    dest_path: str
+    # Only a filename -- the destination directory is always the server's
+    # settings.download_dir, never client-supplied, so this can't be used
+    # to write outside the download folder. See DownloadManager.add_download.
+    filename: str
 
 
 class ProbeResponse(BaseModel):

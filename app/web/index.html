@@ -282,7 +282,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .row[data-active="true"]{box-shadow:inset 2px 0 0 var(--primary)}
 .row:active{transform:scale(0.995)}
 .row .cb{opacity:0;transition:opacity .12s}
-.row:hover .cb,.row[data-selected="true"] .cb,.list[data-anyselected="true"] .cb{opacity:1}
+.row:hover .cb,.row[data-selected="true"] .cb,.list[data-anyselected="true"] .cb,.row:focus-within .cb{opacity:1}
 
 .ficon{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;flex:none;
   font-size:9.5px;font-weight:700;letter-spacing:.02em;
@@ -313,7 +313,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 
 .ractions{display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
-.row:hover .ractions,.row[data-active="true"] .ractions{opacity:1}
+.row:hover .ractions,.row[data-active="true"] .ractions,.row:focus-within .ractions{opacity:1}
 .rmeta{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:88px}
 .rspeed{font-size:11.5px;font-weight:600}
 .reta{font-size:10.5px;color:var(--muted-foreground)}
@@ -761,7 +761,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
       </div>
 
       <div class="bulkbar glass hidden" id="bulkbar">
-        <span class="cb" role="checkbox" id="selectAllCb" data-bulk="all" aria-label="Select all"><i class="checkbox"></i></span>
+        <span class="cb" role="checkbox" id="selectAllCb" data-bulk="all" tabindex="0" aria-label="Select all"><i class="checkbox"></i></span>
         <b id="bulkCount">Select all</b>
         <div class="tb-sep"></div>
         <button class="btn btn-sm btn-ghost" data-bulk="resume">Resume</button>
@@ -1492,7 +1492,7 @@ function renderList(){
     const showBar = d.state!=="completed";
     const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
     return '<div class="row" data-id="'+d.id+'" data-selected="'+sel+'" data-active="'+(ui.activeId===d.id)+'" tabindex="0">'+
-      '<span class="cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" aria-label="Select '+esc(d.name)+'"><i class="checkbox" aria-checked="'+sel+'"></i></span>'+
+      '<span class="cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" tabindex="0" aria-label="Select '+esc(d.name)+'"><i class="checkbox" aria-checked="'+sel+'"></i></span>'+
       '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
       '<div class="rmain">'+
         '<div class="rtop"><span class="fname">'+esc(d.name)+'</span>'+
@@ -1511,12 +1511,12 @@ function renderList(){
       '<div style="display:flex;align-items:center;gap:8px">'+
         '<div class="rmeta">'+rowMeta(d)+'</div>'+
         '<div class="ractions">'+
-          (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-ghost btn-icon" data-act="pause" data-id="'+d.id+'" title="Pause">'+PAUSE+'</button>':'')+
-          (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume">'+PLAY+'</button>':'')+
-          (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry">'+RETRY+'</button>':'')+
-          (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder">'+FOLDER+'</button>':'')+
-          (isMediaDownload(d)&&d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview">'+PLAY+'</button>':'')+
-          '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More">'+DOTS+'</button>'+
+          (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-ghost btn-icon" data-act="pause" data-id="'+d.id+'" title="Pause" aria-label="Pause '+esc(d.name)+'">'+PAUSE+'</button>':'')+
+          (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume" aria-label="Resume '+esc(d.name)+'">'+PLAY+'</button>':'')+
+          (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry" aria-label="Retry '+esc(d.name)+'">'+RETRY+'</button>':'')+
+          (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder" aria-label="Show '+esc(d.name)+' in Finder">'+FOLDER+'</button>':'')+
+          (isMediaDownload(d)&&d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview" aria-label="Preview '+esc(d.name)+'">'+PLAY+'</button>':'')+
+          '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More" aria-label="More actions for '+esc(d.name)+'">'+DOTS+'</button>'+
         '</div>'+
       '</div>'+
     '</div>';
@@ -1689,15 +1689,27 @@ async function act(id,what){
   }catch(err){ toast("err","Action failed",err.message); }
 }
 
+function toggleRowSelect(id){ ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); }
+
 document.getElementById("list").addEventListener("click",e=>{
   const cb=e.target.closest("[data-check]");
-  if(cb){ const id=cb.dataset.check; ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); return; }
+  if(cb){ toggleRowSelect(cb.dataset.check); return; }
   const btn=e.target.closest("[data-act]");
   if(btn){ e.stopPropagation();
     if(btn.dataset.act==="menu"){ openMenu(btn, btn.dataset.id); return; }
     return act(btn.dataset.id,btn.dataset.act); }
   const row=e.target.closest(".row");
   if(row){ ui.activeId = ui.activeId===row.dataset.id ? null : row.dataset.id; ui.tab="overview"; render(); }
+});
+// The per-row checkbox is a role="checkbox" span, not a native <input>, so
+// it needs an explicit key handler -- without this it's a keyboard dead
+// end despite being reachable via Tab (tabindex="0").
+document.getElementById("list").addEventListener("keydown",e=>{
+  if(e.key!=="Enter" && e.key!==" ") return;
+  const cb=e.target.closest("[data-check]");
+  if(!cb) return;
+  e.preventDefault();
+  toggleRowSelect(cb.dataset.check);
 });
 document.getElementById("list").addEventListener("contextmenu",e=>{
   const row=e.target.closest(".row"); if(!row) return;
@@ -1802,6 +1814,15 @@ function toggleSelectAll(){
   render();
 }
 
+// The master checkbox is a role="checkbox" span (see selectAllCb markup
+// above), not a native <input> -- same keyboard gap as the per-row ones.
+document.getElementById("bulkbar").addEventListener("keydown",e=>{
+  if(e.key!=="Enter" && e.key!==" ") return;
+  if(!e.target.closest("#selectAllCb")) return;
+  e.preventDefault();
+  toggleSelectAll();
+});
+
 document.getElementById("bulkbar").addEventListener("click",async e=>{
   const b=e.target.closest("[data-bulk]"); if(!b) return;
   const w=b.dataset.bulk;
@@ -1820,17 +1841,40 @@ document.getElementById("bulkbar").addEventListener("click",async e=>{
       ui.selected = new Set();
       ui.activeId = null;
     }
-    toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
+    if(w==="remove") toast("info", "Removed "+ids.length+" downloads", "Files are kept on disk");
+    else toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
   }catch(err){ toast("err","Bulk action failed",err.message); }
   ui.selected.clear(); render();
 });
 
 /* ---------- dialogs ---------- */
-function closeOverlay(){ document.getElementById("overlays").innerHTML=""; }
+let _overlayLastFocused=null;
+function closeOverlay(){
+  document.getElementById("overlays").innerHTML="";
+  // Return focus to whatever opened the dialog -- without this, closing
+  // (Escape, the Cancel/Done button, or clicking the scrim) dropped
+  // keyboard focus to <body>, forcing a keyboard user to re-navigate from
+  // the top of the page instead of picking up where they left off.
+  if(_overlayLastFocused && document.contains(_overlayLastFocused)) _overlayLastFocused.focus();
+  _overlayLastFocused=null;
+}
 function overlay(html){
+  _overlayLastFocused=document.activeElement;
   const box=document.getElementById("overlays");
   box.innerHTML='<div class="scrim" id="scrim">'+html+'</div>';
-  document.getElementById("scrim").addEventListener("mousedown",e=>{ if(e.target.id==="scrim") closeOverlay(); });
+  const scrim=document.getElementById("scrim");
+  scrim.addEventListener("mousedown",e=>{ if(e.target.id==="scrim") closeOverlay(); });
+  // Focus trap: Tab/Shift+Tab cycles within the dialog instead of leaking
+  // focus out into the (still-present, just visually dimmed) app behind it.
+  scrim.addEventListener("keydown",e=>{
+    if(e.key!=="Tab") return;
+    const focusable=[...box.querySelectorAll('input,select,button,textarea,[tabindex]')]
+      .filter(el=>!el.disabled && el.offsetParent!==null);
+    if(!focusable.length) return;
+    const first=focusable[0], last=focusable[focusable.length-1];
+    if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+    else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+  });
   const first=box.querySelector("input,select,button"); if(first) first.focus();
   return box.querySelector(".dialog");
 }
@@ -1881,11 +1925,18 @@ function addDialog(prefillUrl){
 
   dlg.querySelector("#addGo").onclick=async()=>{
     const url=urlInput.value.trim();
-    const folder=dlg.querySelector("#addFolder").value.trim();
     const name=nameInput.value.trim()||"download";
     if(!url){ toast("err","Add a link first","The URL field is empty"); return; }
+    let parsed;
+    try{ parsed=new URL(url); }catch(_){ toast("err","That doesn't look like a valid link","Include the http:// or https:// part"); return; }
+    if(parsed.protocol!=="http:"&&parsed.protocol!=="https:"){
+      toast("err","Only http:// and https:// links are supported",parsed.protocol+" isn't"); return;
+    }
     try{
-      const task=await post("/api/downloads", {url, dest_path: folder.replace(/\/$/,"")+"/"+name});
+      // Only a filename goes to the server -- the destination folder is
+      // always the current default (changed via Browse above, which
+      // already saved it to settings), never sent as a path from here.
+      const task=await post("/api/downloads", {url, filename: name});
       upsert(task); closeOverlay(); render();
       if(task.status==="completed") toast("info","Already downloaded",task.filename+" — kept the existing file");
       else toast("ok","Added",task.filename);
@@ -1933,7 +1984,12 @@ function settingsPanes(){
 }
 
 async function settingsDialog(){
-  try{ settingsCache=await getJSON("/api/settings"); }catch(_){}
+  // Both fall back to whatever's already cached on failure (better than a
+  // blank dialog), but that fallback used to be silent -- a failed load
+  // looked identical to a successful one, so a stale/broken settings view
+  // gave no indication anything was wrong.
+  try{ settingsCache=await getJSON("/api/settings"); }
+  catch(err){ toast("err","Couldn't load settings",err.message); }
   try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
   const tabs=["General","Downloads","Chrome","Advanced"];
   const panes=settingsPanes();
@@ -1970,7 +2026,19 @@ async function settingsDialog(){
     });
     const clearBtn=dlg.querySelector("#setClearCompleted");
     if(clearBtn) clearBtn.onclick=async()=>{
-      try{ const r=await post("/api/downloads/clear-completed"); toast("ok","Cleared "+r.removed+" completed downloads"); }
+      try{
+        const r=await post("/api/downloads/clear-completed");
+        // Mirror removeAllBtn's local cleanup -- the server call alone
+        // doesn't touch the in-memory `downloads` array, so without this
+        // cleared items stayed visible in the list until an unrelated
+        // event happened to trigger a re-render.
+        const completed=downloads.filter(d=>d.state==="completed");
+        downloads=downloads.filter(d=>d.state!=="completed");
+        completed.forEach(d=>thumbCache.delete(d.id));
+        if(ui.activeId && completed.find(d=>d.id===ui.activeId)) ui.activeId=null;
+        toast("ok","Cleared "+r.removed+" completed downloads","Files are kept on disk");
+        render();
+      }
       catch(err){ toast("err","Couldn't clear completed",err.message); }
     };
     const resetBtn=dlg.querySelector("#setResetAll");

@@ -34,7 +34,8 @@ class DownloadWorker(QThread):
     progress = Signal(str, int, int, float)  # task_id, downloaded, total, speed_bps
     status_changed = Signal(str, str, str)  # task_id, status_value, error_message
     metadata_resolved = Signal(str, int, str, str)  # task_id, total_bytes, etag, last_modified
-    digest_computed = Signal(str, str, bool)  # task_id, sha256_hex, verified_against_server
+    digest_computed = Signal(str, str, object)  # task_id, sha256_hex, verified (True/False/None)
+    size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, parent=None):
@@ -83,13 +84,13 @@ class DownloadWorker(QThread):
                 # manager will simply not record a digest for this task.
                 try:
                     digest = _sha256_file(self.dest_path)
-                    # digest_verified is the badge surface: True when the
-                    # server's Digest header (RFC 9530) was present and
-                    # matched what we computed. False when the server gave
-                    # no header (most don't). The "mismatch" case is
-                    # surfaced through the download log instead of a
-                    # separate status, since a checksum mismatch usually
-                    # means a man-in-the-middle or a corrupted upstream.
+                    # verified is the badge surface: True when the server's
+                    # Digest header (RFC 9530) was present and matched what
+                    # we computed, None when the server gave no header (most
+                    # don't -- not an error), False when it sent one and it
+                    # DIDN'T match -- a real integrity failure (MITM or
+                    # corrupted upstream), surfaced distinctly in the
+                    # download log rather than folded into the None case.
                     verified = self._verify_against_server(digest)
                     self.digest_computed.emit(self.task_id, digest, verified)
                 except OSError:
@@ -134,10 +135,24 @@ class DownloadWorker(QThread):
         """Returns the total bytes on disk once this attempt's streaming completes."""
         existing_bytes = os.path.getsize(self.part_path) if os.path.exists(self.part_path) else 0
 
+        # A resume is only safe when we can pair it with If-Range: that's
+        # what makes the server reject stale bytes (sending 200 + the full
+        # body instead of 206) if the file changed since we started. With
+        # neither ETag nor Last-Modified from the original response, there
+        # is nothing to validate against -- a bare Range request could get
+        # silently honored against a *different* file underneath, splicing
+        # new bytes onto old ones with no error. Rather than risk that,
+        # treat the partial file as unusable and restart from scratch, same
+        # as the "server ignored Range" 200-response branch below already
+        # does when a resume attempt IS made but rejected.
+        can_resume = existing_bytes > 0 and bool(self.etag or self.last_modified)
+        if existing_bytes > 0 and not can_resume:
+            existing_bytes = 0
+
         headers = {}
         if self.cookie_header:
             headers["Cookie"] = self.cookie_header
-        if existing_bytes > 0:
+        if can_resume:
             headers["Range"] = f"bytes={existing_bytes}-"
             # If-Range makes the resume conditional: the server only honors the
             # Range and sends 206 if the file is unchanged since we started it.
@@ -238,7 +253,7 @@ class DownloadWorker(QThread):
 
         return downloaded
 
-    def _verify_against_server(self, computed_hex: str) -> bool:
+    def _verify_against_server(self, computed_hex: str) -> bool | None:
         return _verify_against_server(self._server_digest_sha256, computed_hex)
 
     def _finalize(self, downloaded: int) -> None:
@@ -247,6 +262,19 @@ class DownloadWorker(QThread):
                 f"Downloaded size ({os.path.getsize(self.part_path)}) does not match "
                 f"expected size ({self._total_bytes})"
             )
+        if not self._total_bytes:
+            # No Content-Length AND not chunked (chunked truncation is
+            # already caught earlier -- iter_content raises
+            # ChunkedEncodingError if the stream ends mid-chunk, which
+            # propagates out of _attempt_download as a RequestException and
+            # goes through the normal retry path, never reaching here).
+            # This is the rare leftover case: an old-style connection-close
+            # -delimited body, where nothing in the protocol distinguishes
+            # "the server finished" from "the connection just dropped" --
+            # there's genuinely no length signal to verify against, so
+            # surface that honestly instead of silently completing as if
+            # the size had been checked.
+            self.size_unverified.emit(self.task_id)
         os.replace(self.part_path, self.dest_path)
         self.progress.emit(self.task_id, downloaded, self._total_bytes, 0.0)
 
@@ -276,15 +304,21 @@ def _parse_sha256_digest(header_value: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def _verify_against_server(server_b64: str | None, computed_hex: str) -> bool:
+def _verify_against_server(server_b64: str | None, computed_hex: str) -> bool | None:
     """Compare computed hex digest against server's base64 digest.
 
-    Returns True if they match, False on mismatch or no server value.
+    Three-way result, not a plain bool -- "the server sent no Digest
+    header" and "the server sent one and it doesn't match" are very
+    different situations (the second is a real integrity failure) and
+    callers need to tell them apart:
+      * None  -- no server value to compare against
+      * True  -- match
+      * False -- mismatch
     Imported lazily because it's only used post-download and pulling in
     base64 on every chunk-write would be wasteful.
     """
     if not server_b64:
-        return False
+        return None
     import base64
     try:
         server_bytes = base64.b64decode(server_b64)

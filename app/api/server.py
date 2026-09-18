@@ -20,7 +20,7 @@ from app.api.schemas import (
     HistoryEntry, NewDownloadRequest, PickFolderResponse, ProbeResponse,
     SettingsOut, SettingsPatch,
 )
-from app.engine.manager import DownloadManager
+from app.engine.manager import DownloadManager, prune_empty_auto_folder_dir
 from app.engine.models import DownloadStatus
 from app.engine.probe import guess_filename_from_url, probe_remote_filename
 from app.engine.settings import Settings
@@ -221,6 +221,29 @@ def _transcode_cache_key(src_path: str) -> str:
     return f"{os.path.basename(src_path)}.{int(st.st_mtime)}.{st.st_size}.webm"
 
 
+def _remove_transcode_cache(src_path: str, cache_dir: str) -> None:
+    """Delete the cached WebM transcode for a download that's being removed.
+
+    Once the task is gone, nothing will ever look this cache entry up
+    again (lookups only happen via an active task's preview action) --
+    without this, every previewed video/audio file left an orphaned
+    transcode behind forever, with no eviction anywhere in the app. Must
+    run *before* the source file itself is deleted: the cache key is
+    derived from the source's mtime+size, which requires stat'ing a file
+    that still exists.
+    """
+    try:
+        key = _transcode_cache_key(src_path)
+    except OSError:
+        return  # source already gone -- nothing to key the cache entry by
+    cached = os.path.join(cache_dir, key)
+    try:
+        if os.path.exists(cached):
+            os.remove(cached)
+    except OSError:
+        pass
+
+
 def _get_or_build_transcoded(src_path: str, cache_dir: str,
                               max_wait_s: float = 600.0) -> str | None:
     """Return the path to a transcoded WebM, building it if needed.
@@ -296,6 +319,24 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="FlowDownload API")
 
+    @app.middleware("http")
+    async def _reject_dns_rebinding(request: Request, call_next):
+        # uvicorn binds 127.0.0.1-only, but that alone doesn't stop DNS
+        # rebinding: a page on attacker-controlled-domain.com can resolve
+        # that hostname to 127.0.0.1 and fetch same-origin, landing here
+        # with a Host header of "attacker-controlled-domain.com:8756"
+        # instead of "127.0.0.1:8756". Validating the Host header closes
+        # that gap -- a real browser navigating to this app always sends
+        # the host it actually connected to.
+        host = (request.headers.get("host") or "").split(":", 1)[0]
+        if host not in ("127.0.0.1", "localhost"):
+            # Returned directly (not raised) -- an HTTPException raised from
+            # inside @app.middleware("http") isn't routed through FastAPI's
+            # exception handlers and would otherwise surface as an opaque
+            # 500 instead of this explicit rejection.
+            return HTMLResponse("Invalid Host header", status_code=421)
+        return await call_next(request)
+
     @app.get("/", response_class=HTMLResponse)
     def index():
         # The token is embedded directly in the page rather than fetched
@@ -345,10 +386,13 @@ def create_app(
     @app.post("/api/downloads", response_model=DownloadOut, status_code=201)
     def create_download(body: NewDownloadRequest, _=Depends(require_token)):
         def _create():
-            task_id = manager.add_download(body.url, body.dest_path)
+            task_id = manager.add_download(body.url, body.filename)
             return DownloadOut.from_task(manager.tasks[task_id])
 
-        return executor.call(_create)
+        try:
+            return executor.call(_create)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/api/probe", response_model=ProbeResponse)
     def probe(url: str, _=Depends(require_token)):
@@ -631,9 +675,14 @@ def create_app(
 
     @app.post("/api/downloads/clear-completed")
     def clear_completed(_=Depends(require_token)):
+        cache_dir = os.path.join(app_data_dir, "transcoded")
+
         def _clear():
             ids = [t.id for t in manager.tasks.values() if t.status == DownloadStatus.COMPLETED]
             for task_id in ids:
+                task = manager.tasks.get(task_id)
+                if task is not None:
+                    _remove_transcode_cache(task.dest_path, cache_dir)
                 manager.remove(task_id)
             return len(ids)
 
@@ -645,15 +694,20 @@ def create_app(
 
     @app.delete("/api/downloads/{task_id}")
     def delete_download(task_id: str, delete_file: bool = False, _=Depends(require_token)):
+        cache_dir = os.path.join(app_data_dir, "transcoded")
+
         def _remove():
             task = manager.tasks.get(task_id)
             dest_path = task.dest_path if task is not None else None
+            if dest_path:
+                _remove_transcode_cache(dest_path, cache_dir)
             manager.remove(task_id)
             return dest_path
 
         dest_path = executor.call(_remove)
         if delete_file and dest_path and os.path.exists(dest_path):
             os.remove(dest_path)
+            prune_empty_auto_folder_dir(dest_path, manager.settings.download_dir)
         return {"ok": True}
 
     @app.get("/api/settings", response_model=SettingsOut)
