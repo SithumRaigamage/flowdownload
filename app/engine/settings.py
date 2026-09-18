@@ -18,6 +18,11 @@ class Settings:
     # When True, new downloads are routed to <download_dir>/<type>/<file>
     # based on extension. Off by default to preserve existing user behavior.
     auto_folder_by_type: bool = False
+    # What to do when a URL matches a completed download: "rename" keeps
+    # both files (today's default -- a new filename is picked automatically),
+    # "skip" reuses the existing completed task instead of downloading again,
+    # "overwrite" replaces the existing file with a fresh copy.
+    duplicate_policy: str = "rename"
 
     @classmethod
     def load(cls, path: str) -> "Settings":

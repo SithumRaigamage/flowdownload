@@ -115,6 +115,25 @@ class DownloadManager(QObject):
         # immediately but isn't polled into self.tasks for up to
         # EXTERNAL_POLL_INTERVAL_MS, so self.tasks alone could still miss it.
         reserved = {t.dest_path for t in self.storage.load_all()}
+
+        dup = self.check_dedupe(url)
+        if dup.is_duplicate:
+            if self.settings.duplicate_policy == "skip":
+                self._log(dup.existing_task_id, "info", "Re-add skipped: URL already completed")
+                return dup.existing_task_id
+            if self.settings.duplicate_policy == "overwrite":
+                old = self.tasks.pop(dup.existing_task_id, None)
+                if old is not None:
+                    if os.path.exists(old.dest_path):
+                        os.remove(old.dest_path)
+                    self.storage.delete(old.id)
+                    self.history.pop(old.id, None)
+                    reserved.discard(old.dest_path)
+                    self.task_removed.emit(old.id)
+                    dest_path = old.dest_path
+            # "rename" (default) falls through unchanged -- dedupe_path below
+            # already picks a fresh filename on any collision.
+
         dest_path = dedupe_path(dest_path, reserved)
         task = DownloadTask(
             url=url, dest_path=dest_path, filename=os.path.basename(dest_path),

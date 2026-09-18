@@ -151,12 +151,14 @@ def handle_message(message: dict) -> dict:
     storage = Storage(DB_PATH)
     # Dedupe check: if the URL is already represented by a completed task,
     # surface that to the extension so the popup can say "Already downloaded"
-    # instead of silently queueing a duplicate. We don't refuse the request
-    # outright -- the user can still choose to re-download if they want a
-    # fresh copy.
+    # instead of silently queueing a duplicate. What happens next depends on
+    # settings.duplicate_policy -- mirrors DownloadManager.add_download so
+    # the Chrome hand-off and the in-app "Add download" dialog agree.
+    existing_match = None
     duplicate = None
     for existing in storage.load_all():
         if existing.status == DownloadStatus.COMPLETED and existing.url == url:
+            existing_match = existing
             duplicate = {
                 "task_id": existing.id,
                 "dest_path": existing.dest_path,
@@ -164,6 +166,11 @@ def handle_message(message: dict) -> dict:
                 "digest": existing.digest_sha256,
             }
             break
+
+    policy = getattr(settings, "duplicate_policy", "rename")
+    if existing_match is not None and policy == "skip":
+        launch_app_if_needed()
+        return {"ok": True, "filename": existing_match.filename, "duplicate": duplicate}
 
     # Auto-folder rule (matches the engine's apply_auto_folder):
     # when the user has opted in, route by extension into a subfolder
@@ -178,7 +185,18 @@ def handle_message(message: dict) -> dict:
     # see -- without this, two downloads handed off in quick succession with
     # the same suggested filename would collide and corrupt each other.
     reserved = {t.dest_path for t in storage.load_all()}
-    dest_path = dedupe_path(os.path.join(base_dir, filename), reserved)
+    dest_path = os.path.join(base_dir, filename)
+
+    if existing_match is not None and policy == "overwrite":
+        if os.path.exists(existing_match.dest_path):
+            os.remove(existing_match.dest_path)
+        storage.delete(existing_match.id)
+        reserved.discard(existing_match.dest_path)
+        dest_path = existing_match.dest_path
+    # "rename" (default) falls through unchanged -- dedupe_path below already
+    # picks a fresh filename on any collision.
+
+    dest_path = dedupe_path(dest_path, reserved)
     task = DownloadTask(
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
         status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",

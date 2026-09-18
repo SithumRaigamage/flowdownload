@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from app.engine.models import DownloadTask
@@ -90,6 +92,7 @@ class SettingsOut(BaseModel):
     notifications_enabled: bool
     minimize_to_tray: bool
     auto_folder_by_type: bool
+    duplicate_policy: Literal["rename", "skip", "overwrite"]
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SettingsOut":
@@ -99,6 +102,7 @@ class SettingsOut(BaseModel):
             notifications_enabled=settings.notifications_enabled,
             minimize_to_tray=settings.minimize_to_tray,
             auto_folder_by_type=settings.auto_folder_by_type,
+            duplicate_policy=settings.duplicate_policy,
         )
 
 
@@ -108,6 +112,7 @@ class SettingsPatch(BaseModel):
     notifications_enabled: bool | None = None
     minimize_to_tray: bool | None = None
     auto_folder_by_type: bool | None = None
+    duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
 
 
 class DedupeCheckRequest(BaseModel):

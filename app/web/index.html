@@ -809,7 +809,7 @@ const del = (path)=>api(path, {method:"DELETE"});
 
 /* ---------- state ---------- */
 let downloads = [];
-let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false};
+let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false, duplicate_policy:"rename"};
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
@@ -1886,7 +1886,9 @@ function addDialog(prefillUrl){
     if(!url){ toast("err","Add a link first","The URL field is empty"); return; }
     try{
       const task=await post("/api/downloads", {url, dest_path: folder.replace(/\/$/,"")+"/"+name});
-      upsert(task); closeOverlay(); render(); toast("ok","Added",task.filename);
+      upsert(task); closeOverlay(); render();
+      if(task.status==="completed") toast("info","Already downloaded",task.filename+" — kept the existing file");
+      else toast("ok","Added",task.filename);
     }catch(err){ toast("err","Couldn't start download",err.message); }
   };
 }
@@ -1910,7 +1912,15 @@ function settingsPanes(){
       '</div>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately.</p>'+
       '</div>'+
-      switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type),
+      switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
+      '<div class="field"><label class="label" for="setDupPolicy">When a link was already downloaded</label>'+
+      '<select class="input" id="setDupPolicy" data-input="duplicate_policy" style="width:auto">'+
+        '<option value="rename"'+(settingsCache.duplicate_policy==="rename"?" selected":"")+'>Save as a new file</option>'+
+        '<option value="skip"'+(settingsCache.duplicate_policy==="skip"?" selected":"")+'>Skip — keep the existing file</option>'+
+        '<option value="overwrite"'+(settingsCache.duplicate_policy==="overwrite"?" selected":"")+'>Overwrite the existing file</option>'+
+      '</select>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Applies when the same URL was already completed — from the extension or the Add download dialog.</p>'+
+      '</div>',
     Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
       '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.")+'</p></div>'+
       '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
@@ -1952,6 +1962,12 @@ async function settingsDialog(){
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }
+    const dupPolicy=dlg.querySelector("#setDupPolicy");
+    if(dupPolicy) dupPolicy.addEventListener("change",async()=>{
+      const val=dupPolicy.value;
+      try{ settingsCache=await patch("/api/settings",{duplicate_policy:val}); toast("ok","Saved"); }
+      catch(err){ dupPolicy.value=settingsCache.duplicate_policy; toast("err","Couldn't save setting",err.message); }
+    });
     const clearBtn=dlg.querySelector("#setClearCompleted");
     if(clearBtn) clearBtn.onclick=async()=>{
       try{ const r=await post("/api/downloads/clear-completed"); toast("ok","Cleared "+r.removed+" completed downloads"); }
