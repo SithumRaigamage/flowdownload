@@ -1,46 +1,61 @@
 from __future__ import annotations
 
+import errno
+import fcntl
 import os
 
 
 class InstanceLock:
-    """Simple PID-file based single-instance guard.
+    """flock-based single-instance guard.
 
     Needs to be checkable from a plain Python script with no Qt dependency
     (the Chrome native messaging host does this too, to decide whether it
     needs to launch FlowDownload or can rely on the running instance to pick
     up a new row via its polling), so this deliberately avoids QLockFile.
+
+    Uses fcntl.flock rather than a plain PID-file check: flock is atomic (no
+    check-then-write gap for concurrent launches to race through) and is
+    released automatically by the kernel on process exit or crash, so it
+    can't go stale the way a PID file can if the PID gets recycled.
     """
 
     def __init__(self, pid_file: str):
         self.pid_file = pid_file
-        self._acquired = False
+        self._fd: int | None = None
 
     @staticmethod
     def is_running(pid_file: str) -> bool:
         if not os.path.exists(pid_file):
             return False
+        fd = os.open(pid_file, os.O_RDWR)
         try:
-            with open(pid_file) as f:
-                pid = int(f.read().strip())
-        except (ValueError, OSError):
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
             return False
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return False  # stale pid file, process is gone
-        return True
+        except OSError as e:
+            if e.errno in (errno.EACCES, errno.EAGAIN):
+                return True
+            return False
+        finally:
+            os.close(fd)
 
     def acquire(self) -> bool:
-        if self.is_running(self.pid_file):
-            return False
         os.makedirs(os.path.dirname(self.pid_file), exist_ok=True)
-        with open(self.pid_file, "w") as f:
-            f.write(str(os.getpid()))
-        self._acquired = True
+        fd = os.open(self.pid_file, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            os.close(fd)
+            if e.errno in (errno.EACCES, errno.EAGAIN):
+                return False
+            raise
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
+        self._fd = fd
         return True
 
     def release(self) -> None:
-        if self._acquired and os.path.exists(self.pid_file):
-            os.remove(self.pid_file)
-            self._acquired = False
+        if self._fd is not None:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None

@@ -4,16 +4,7 @@ import os
 import signal
 import sys
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
-
-from app.api.runner import ApiServer
 from app.engine.instance_lock import InstanceLock
-from app.engine.manager import DownloadManager
-from app.engine.settings import Settings
-from app.engine.storage import Storage
-from app.ui.tray import TrayController, make_app_icon
-from app.ui.web_window import WebMainWindow
 
 APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".flowdownload")
 DB_PATH = os.path.join(APP_DATA_DIR, "downloads.db")
@@ -30,6 +21,18 @@ def main() -> None:
         # second DownloadManager here would race it on the same rows.
         print("FlowDownload is already running.", file=sys.stderr)
         sys.exit(0)
+
+    # Imported here, after the lock check, so a losing process exits before
+    # paying for PySide6/QtWebEngine's slow import instead of racing it.
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from app.api.runner import ApiServer
+    from app.engine.manager import DownloadManager
+    from app.engine.settings import Settings
+    from app.engine.storage import Storage
+    from app.ui.tray import TrayController, make_app_icon
+    from app.ui.web_window import WebMainWindow
 
     app = QApplication(sys.argv)
     app.setWindowIcon(make_app_icon(128))  # sets the macOS Dock icon, not just the titlebar
