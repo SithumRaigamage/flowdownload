@@ -252,10 +252,15 @@ class DownloadManager(QObject):
                 self.task_updated.emit(task_id)
 
     def remove(self, task_id: str) -> None:
-        worker = self._workers.get(task_id)
+        worker = self._workers.pop(task_id, None)
         if worker is not None:
             worker.cancel()
-            worker.wait(2000)
+            # Wait for the thread to stop before dropping the reference. If it
+            # cannot join in time, keep it alive at module scope so nothing
+            # garbage-collects a running QThread -- which would trigger Qt's
+            # fatal "destroyed while thread is still running" abort.
+            if not worker.wait(2000) and worker.isRunning():
+                _STUCK_WORKERS.append(worker)
 
         task = self.tasks.pop(task_id, None)
         if task is not None and os.path.exists(task.part_path):
@@ -347,10 +352,15 @@ class DownloadManager(QObject):
             # be garbage-collected. Without this, Python's GC can call the
             # Shiboken deallocator while the C++ thread is still running, which
             # triggers QThread's "destroyed while thread is still running" abort.
-            # A brief wait is safe here because the finished signal already
-            # guarantees run() has returned; it just hasn't been joined yet.
-            worker.wait(1000)
-            worker.deleteLater()
+            # The finished signal fires when run() returns, but the native
+            # thread teardown can lag, so don't delete the wrapper until the
+            # join is confirmed. If it can't join in time (e.g. blocked in a
+            # syscall), stash it at module scope so nothing GC's a running
+            # QThread.
+            if worker.wait(1000):
+                worker.deleteLater()
+            else:
+                _STUCK_WORKERS.append(worker)
         self._dispatch_queue()
 
     def _on_progress(self, task_id: str, downloaded: int, total: int, speed: float) -> None:
