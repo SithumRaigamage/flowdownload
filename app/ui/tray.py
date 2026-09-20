@@ -58,6 +58,11 @@ class TrayController:
         self.icon.show()
 
         self.manager.task_finished.connect(self._on_task_finished)
+        # A download that arrives while the window is hidden (started
+        # minimized at launch, or closed to tray) should still surface the
+        # window -- the whole point of hiding on a bare cold start is that
+        # there's nothing to show yet, not that downloads should stay silent.
+        self.manager.task_added.connect(self._show_window)
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:

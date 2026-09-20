@@ -28,7 +28,8 @@ def main() -> None:
     from PySide6.QtWidgets import QApplication
 
     from app.api.runner import ApiServer
-    from app.engine.manager import DownloadManager
+    from app.engine.manager import ACTIVE_STATUSES, DownloadManager
+    from app.engine.models import DownloadStatus
     from app.engine.settings import Settings
     from app.engine.storage import Storage
     from app.ui.tray import TrayController, make_app_icon
@@ -56,7 +57,16 @@ def main() -> None:
     # the server's MainThreadExecutor, so it is safe to construct QWidgets
     # inside.
     api_server.set_native_player_opener(window.open_native_player)
-    window.show()
+
+    # Only surface the window if there's an actual download in flight (e.g.
+    # the Chrome native host just queued one and launched us). A cold start
+    # with nothing pending -- whatever silently triggered it, such as macOS
+    # resuming windows at login -- stays in the tray instead of stealing
+    # focus. TrayController wires task_added so a download that arrives
+    # later still raises the window automatically.
+    in_flight_statuses = (DownloadStatus.QUEUED, *ACTIVE_STATUSES)
+    if any(task.status in in_flight_statuses for task in manager.tasks.values()):
+        window.show()
 
     tray = TrayController(window, manager)  # noqa: F841 -- keeps the tray icon alive
 
