@@ -18,6 +18,11 @@ block_cipher = None
 # terms of that.
 ROOT = Path(".").resolve()
 
+# Single source of truth for the app's version. scripts/build_app.sh can
+# overwrite this file (via --version) before invoking pyinstaller; running
+# the build without that flag just re-embeds whatever version is already here.
+APP_VERSION = (ROOT / "VERSION").read_text().strip()
+
 # The web UI is served by the bundled ApiServer, so it has to be copied in
 # alongside the Python modules. Collecting from `app/web` keeps the relative
 # path the runtime expects (`app/web/index.html`). The .icns is also bundled
@@ -89,8 +94,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "FlowDownload",
         "CFBundleDisplayName": "FlowDownload",
-        "CFBundleShortVersionString": "1.0.0",
-        "CFBundleVersion": "1.0.0",
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
         "NSHighResolutionCapable": True,
         "LSUIElement": False,  # show in Dock; set True to make it a menu-bar-only app
     },

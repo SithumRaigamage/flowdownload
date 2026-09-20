@@ -118,3 +118,6 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
 Known gaps and possible future work (platform support beyond macOS, code
 signing, bandwidth throttling, an actual automated test suite, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
+
+
+./scripts/build_app.sh --version 1.1.0

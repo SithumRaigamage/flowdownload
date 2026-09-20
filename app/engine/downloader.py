@@ -26,6 +26,19 @@ SPEED_SMOOTHING = 0.3  # EMA factor: higher = more responsive, lower = steadier 
 CONTENT_RANGE_TOTAL_RE = re.compile(r"/(\d+)$")
 
 
+# 4xx statuses that mean "retrying won't help" -- the resource is gone,
+# forbidden, or the request itself is malformed, none of which changes by
+# waiting and asking again. 408 (Request Timeout) and 429 (Too Many
+# Requests) are deliberately excluded: those are the server explicitly
+# asking for a retry.
+PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 405, 406, 410, 451}
+
+
+def _is_permanent_http_error(exc: requests.exceptions.RequestException) -> bool:
+    response = getattr(exc, "response", None)
+    return response is not None and response.status_code in PERMANENT_HTTP_STATUSES
+
+
 class Paused(Exception):
     """Raised internally to unwind out of the streaming loop on pause/cancel."""
 
@@ -102,6 +115,9 @@ class DownloadWorker(QThread):
                 self.status_changed.emit(self.task_id, status.value, "")
                 return
             except requests.exceptions.RequestException as exc:
+                if _is_permanent_http_error(exc):
+                    self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
+                    return
                 attempt += 1
                 delay = compute_retry_delay(attempt)
                 if delay is None:

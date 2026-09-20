@@ -2150,11 +2150,16 @@ function connectWS(){
         renderStats(); renderSystem(); renderViewNav();
         if(ui.activeId===n.id) renderSheet();
       } else {
-        // Library view — re-render if this item is media and might have changed state
+        // Library view — re-render if this item is media and might have changed state.
+        // Gated the same way for both: renderLibFilters' counts only include
+        // completed media (see isMediaDownload), so a non-media or still-
+        // downloading item's progress ticks never change them -- rebuilding
+        // its innerHTML on every tick anyway just thrashed the tab buttons'
+        // DOM nodes, dropping :hover mid-hover and making them flicker.
         if(isMediaDownload(n)){
           renderLibrary();
+          renderLibFilters();
         }
-        renderLibFilters();
         renderViewNav();
       }
     }
