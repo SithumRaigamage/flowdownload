@@ -6,21 +6,37 @@ automatically," not "start over from zero."
 
 ## Running the app
 
-FlowDownload is installed as a normal macOS app at
-`/Applications/FlowDownload.app`. Double-click it, or add it to the Dock:
+FlowDownload is a PyInstaller-built macOS app. Build it with:
 
-1. Open `/Applications` in Finder (or launch it once from Launchpad/Spotlight)
-2. While it's running, right-click its Dock icon → **Options** → **Keep in
-   Dock**
+```bash
+./scripts/build_app.sh                  # build into dist/FlowDownload.app
+./scripts/build_app.sh --version 1.2.0  # bump VERSION first, then build
+./scripts/build_app.sh --install        # build + copy to ~/Applications
+./scripts/build_app.sh --install-system # build + copy to /Applications (needs sudo)
+./scripts/build_app.sh --launch         # build + open it
+```
 
-From then on it launches like any other app. Closing the window (the red
-close button) quits the app entirely — that's the default. If you'd rather
-it minimize to the system tray and keep downloading in the background
-instead, there's a toggle for that in Settings.
+Then double-click `FlowDownload.app` (or the installed copy). To keep it in
+the Dock: while it's running, right-click its Dock icon → **Options** →
+**Keep in Dock**.
+
+**Quit the app before rebuilding** if you run it straight from `dist/` — the
+build replaces that folder in place. Your downloads aren't lost: anything
+mid-download when the app quits resumes automatically on the next launch.
+
+Closing the window (the red close button) quits the app entirely — that's
+the default. If you'd rather it minimize to the system tray and keep
+downloading in the background instead, there's a toggle for that in Settings.
 
 The app keeps its database and settings in `~/.flowdownload/`.
 
-### Running from source instead 
+### Version
+
+The version lives in the `VERSION` file at the project root. It's embedded
+in the app bundle's Info.plist and shown in the app itself (sidebar footer
+and Settings → About).
+
+### Running from source instead
 
 Useful while developing, or if you want to see stdout/stderr directly:
 
@@ -38,17 +54,21 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### If you move or rebuild the project folder
+## How downloads behave
 
-`/Applications/FlowDownload.app` is just a thin launcher — its
-`Contents/MacOS/FlowDownload` script points at this project's `venv` and
-`run.py` by absolute path. If you move the project, update that script (or
-re-run `scripts/setup_chrome_integration.py`, which also depends on the
-project's path — see below) and re-copy the bundle:
-
-```bash
-cp -R dist/FlowDownload.app /Applications/FlowDownload.app
-```
+- **Dropped connections retry automatically** and resume from where they
+  stopped (when the server supports byte ranges). A connection that made
+  progress resets the retry counter, so a flaky but working download is never
+  marked failed; one that gets nowhere gives up after 30 attempts.
+- **At most 6 downloads run at once per site** (e.g. every
+  `*.trafficdeposit.com` host counts as one site), on top of the global
+  "Downloads at once" setting. Extra downloads wait in the queue, and the row
+  says why.
+- **Quitting doesn't lose progress**: interrupted downloads resume on the
+  next launch. Downloads you paused yourself stay paused.
+- **Cancel** stops a download and deletes its partial file. **Remove** takes
+  it off the list and keeps the file; **Delete file…** (right-click a
+  completed download) removes it from disk too.
 
 ## Installing the Chrome extension
 
@@ -108,10 +128,11 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
   uses a lock file (`~/.flowdownload/app.pid`) to refuse a second launch. If
   it ever gets stuck: quit FlowDownload (from its window, or the tray icon if
   minimize-to-tray is on), confirm nothing is left running
-  (`pgrep -fl run.py`), then delete the pid file.
+  (`pgrep -fl FlowDownload`), then delete the pid file.
 - **App won't quit / `Ctrl+C` in a terminal doesn't stop it** — should not
   happen anymore (fixed by adding a proper `SIGINT` handler); if you still
-  see it, force-quit with `pkill -9 -f run.py`.
+  see it, force-quit with `pkill -9 -f FlowDownload.app` (or `pkill -9 -f run.py`
+  when running from source).
 
 ## Roadmap
 
@@ -119,5 +140,3 @@ Known gaps and possible future work (platform support beyond macOS, code
 signing, bandwidth throttling, an actual automated test suite, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 
-
-./scripts/build_app.sh --version 1.1.2

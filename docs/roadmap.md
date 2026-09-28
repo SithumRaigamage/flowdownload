@@ -59,23 +59,17 @@ version-check-and-prompt-to-redownload flow.
 
 ## App features
 
+### Checksums only from the server's `Digest` header
+`DownloadWorker` hashes every finished file (SHA-256) and verifies it
+against an RFC 9530 `Digest` header when the server sends one. Not covered:
+the sidecar-file convention (`file.zip.sha256` next to the download), or a
+user-supplied checksum typed into the Add download dialog.
+
 ### No bandwidth throttling
 `app/engine/downloader.py` streams as fast as the connection allows — no
 setting to cap a download's (or the app's aggregate) speed. Would live
 as a `max_bandwidth_bps` in `Settings`, enforced with a token-bucket sleep
 in `DownloadWorker._stream_to_file`'s chunk loop.
-
-### No checksum verification against a server-provided hash
-`_finalize()` in `downloader.py` only checks that the final file size
-matches `Content-Length` / the `Range` total — not a cryptographic hash.
-Most servers don't expose one, but some do via a `Digest` header or a
-sidecar `.sha256` file convention; worth adding as a best-effort check
-when present, not required.
-
-### No drag-and-drop URL input
-`NewDownloadDialog` requires pasting a URL into the text field. Dragging a
-link from a browser tab or a text selection onto the window isn't wired up
-(`QWidget.setAcceptDrops` + `dragEnterEvent`/`dropEvent` on `MainWindow`).
 
 ### No import of existing Chrome download history
 The extension only sees downloads that start *after* it's loaded — nothing
