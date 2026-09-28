@@ -11,6 +11,7 @@ import time
 import requests
 from PySide6.QtCore import QThread, Signal
 
+from app.engine import segmented
 from app.engine.models import DownloadStatus
 from app.engine.retry_policy import compute_retry_delay
 
@@ -49,9 +50,11 @@ class DownloadWorker(QThread):
     metadata_resolved = Signal(str, int, str, str)  # task_id, total_bytes, etag, last_modified
     digest_computed = Signal(str, str, object)  # task_id, sha256_hex, verified (True/False/None)
     size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
+    connections_resolved = Signal(str, int)  # task_id, connections actually in use (may be < granted)
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
-                 cookie_header: str, session: requests.Session, referrer: str = "", parent=None):
+                 cookie_header: str, session: requests.Session, referrer: str = "",
+                 max_connections: int = 1, parent=None):
         super().__init__(parent)
         # Deliberately plain values/instance attributes, not a reference to the
         # manager's shared DownloadTask: this thread mutates them freely as it
@@ -70,6 +73,9 @@ class DownloadWorker(QThread):
         self.last_modified = last_modified
         self.cookie_header = cookie_header
         self.referrer = referrer
+        # Connections the manager granted from the site's budget; more than
+        # one lets segmented.run_segmented split the file.
+        self.max_connections = max_connections
         self._session = session
         self._pause_event = threading.Event()
         self._cancel_event = threading.Event()
@@ -94,30 +100,41 @@ class DownloadWorker(QThread):
         self._cancel_event.set()
         self._pause_event.set()
 
+    def _complete(self, downloaded: int) -> None:
+        """Verify size, rename into place, hash, and report COMPLETED.
+        Raises OSError if the size check or the rename fails."""
+        self._finalize(downloaded)
+        # Compute the SHA-256 digest after the file is on disk and
+        # renamed to its final name. This is a best-effort signal -- if
+        # hashing fails (OSError), the download is still valid; the
+        # manager will simply not record a digest for this task.
+        try:
+            digest = _sha256_file(self.dest_path)
+            # verified is the badge surface: True when the server's
+            # Digest header (RFC 9530) was present and matched what
+            # we computed, None when the server gave no header (most
+            # don't -- not an error), False when it sent one and it
+            # DIDN'T match -- a real integrity failure (MITM or
+            # corrupted upstream), surfaced distinctly in the
+            # download log rather than folded into the None case.
+            verified = self._verify_against_server(digest)
+            self.digest_computed.emit(self.task_id, digest, verified)
+        except OSError:
+            pass
+        self.status_changed.emit(self.task_id, DownloadStatus.COMPLETED.value, "")
+
     def run(self) -> None:
+        try:
+            if segmented.run_segmented(self):
+                return
+        except Exception as exc:  # noqa: BLE001 -- never die silently and leave the task "downloading"
+            self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, f"{exc.__class__.__name__}: {exc}")
+            return
         attempt = 0
         while True:
             try:
                 downloaded = self._attempt_download()
-                self._finalize(downloaded)
-                # Compute the SHA-256 digest after the file is on disk and
-                # renamed to its final name. This is a best-effort signal -- if
-                # hashing fails (OSError), the download is still valid; the
-                # manager will simply not record a digest for this task.
-                try:
-                    digest = _sha256_file(self.dest_path)
-                    # verified is the badge surface: True when the server's
-                    # Digest header (RFC 9530) was present and matched what
-                    # we computed, None when the server gave no header (most
-                    # don't -- not an error), False when it sent one and it
-                    # DIDN'T match -- a real integrity failure (MITM or
-                    # corrupted upstream), surfaced distinctly in the
-                    # download log rather than folded into the None case.
-                    verified = self._verify_against_server(digest)
-                    self.digest_computed.emit(self.task_id, digest, verified)
-                except OSError:
-                    pass
-                self.status_changed.emit(self.task_id, DownloadStatus.COMPLETED.value, "")
+                self._complete(downloaded)
                 return
             except Paused:
                 status = DownloadStatus.CANCELLED if self._cancel_event.is_set() else DownloadStatus.PAUSED
@@ -147,6 +164,15 @@ class DownloadWorker(QThread):
             except OSError as exc:
                 self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
                 return
+
+    def _base_headers(self) -> dict:
+        """Headers every request for this download carries."""
+        headers = {}
+        if self.cookie_header:
+            headers["Cookie"] = self.cookie_header
+        if self.referrer:
+            headers["Referer"] = self.referrer
+        return headers
 
     def _interruptible_sleep(self, seconds: float) -> bool:
         """Sleep in small slices so pause/cancel take effect promptly.
@@ -178,11 +204,7 @@ class DownloadWorker(QThread):
         if existing_bytes > 0 and not can_resume:
             existing_bytes = 0
 
-        headers = {}
-        if self.cookie_header:
-            headers["Cookie"] = self.cookie_header
-        if self.referrer:
-            headers["Referer"] = self.referrer
+        headers = self._base_headers()
         if can_resume:
             headers["Range"] = f"bytes={existing_bytes}-"
             # If-Range makes the resume conditional: the server only honors the

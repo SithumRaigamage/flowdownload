@@ -29,6 +29,11 @@ CHUNK = 32 * 1024
 # (path, headers) of every request the fixture server received, for tests
 # that check what was actually sent over the wire.
 REQUESTS: list[tuple[str, dict]] = []
+# Concurrent connections being served right now, and the peak since reset.
+CONNECTIONS = {"active": 0, "peak": 0}
+_CONN_LOCK = threading.Lock()
+# path -> ETag, set mid-test to simulate the file changing on the server.
+ETAG_OVERRIDE: dict[str, str] = {}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -59,17 +64,32 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        etag = '"%s"' % q.get("etag", "fixture")
+        etag = '"%s"' % ETAG_OVERRIDE.get(urlparse(self.path).path, q.get("etag", "fixture"))
         rng = self.headers.get("Range")
         if_range = self.headers.get("If-Range")
         if rng and if_range and if_range != etag:
             rng = None  # file changed since the client's copy: send it all
-        start = int(rng.split("=")[1].split("-")[0]) if rng else 0
-        body = DATA[start:]
+        start, end = 0, len(DATA) - 1
+        if rng:
+            first, _, last = rng.split("=")[1].partition("-")
+            start, end = int(first), (int(last) if last else len(DATA) - 1)
+        body = DATA[start:end + 1]
         self.send_response(206 if rng else 200)
         self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))
+        if rng:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(DATA)}")
         self.end_headers()
+        with _CONN_LOCK:
+            CONNECTIONS["active"] += 1
+            CONNECTIONS["peak"] = max(CONNECTIONS["peak"], CONNECTIONS["active"])
+        try:
+            self._send_body(body, q)
+        finally:
+            with _CONN_LOCK:
+                CONNECTIONS["active"] -= 1
+
+    def _send_body(self, body: bytes, q: dict) -> None:
         limit = int(q["drop"]) if "drop" in q else len(body)
         delay = float(q.get("delay", 0.01))
         try:

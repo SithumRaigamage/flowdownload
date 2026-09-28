@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.engine.manager import MAX_PER_DOMAIN
 from app.engine.models import DownloadTask
@@ -27,6 +27,7 @@ class DownloadOut(BaseModel):
     digest_sha256: str
     digest_verified: bool
     referrer: str
+    connections: int
     created_at: float
     updated_at: float
 
@@ -52,6 +53,7 @@ class DownloadOut(BaseModel):
             digest_sha256=task.digest_sha256,
             digest_verified=task.digest_verified,
             referrer=task.referrer,
+            connections=task.connections,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
@@ -99,6 +101,7 @@ class SettingsOut(BaseModel):
     minimize_to_tray: bool
     auto_folder_by_type: bool
     duplicate_policy: Literal["rename", "skip", "overwrite"]
+    connections_per_download: int
     # Read-only engine constant, sent so the UI can explain why a download
     # is still queued without hard-coding the limit a second time.
     max_per_domain: int = MAX_PER_DOMAIN
@@ -112,6 +115,7 @@ class SettingsOut(BaseModel):
             minimize_to_tray=settings.minimize_to_tray,
             auto_folder_by_type=settings.auto_folder_by_type,
             duplicate_policy=settings.duplicate_policy,
+            connections_per_download=settings.connections_per_download,
         )
 
 
@@ -122,6 +126,7 @@ class SettingsPatch(BaseModel):
     minimize_to_tray: bool | None = None
     auto_folder_by_type: bool | None = None
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
+    connections_per_download: int | None = Field(default=None, ge=1, le=8)
 
 
 class RefreshUrlRequest(BaseModel):

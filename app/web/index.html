@@ -843,7 +843,7 @@ function normalize(t){
     id:t.id, name:t.filename || t.dest_path.split("/").pop(), host:hostOf(t.url), url:t.url, dest:t.dest_path,
     size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
     error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
-    referrer:t.referrer||"", hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
+    referrer:t.referrer||"", connections:t.connections||0, hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
   };
 }
 function upsert(raw){
@@ -1468,9 +1468,12 @@ function waitReason(d){
   if(d.state!=="queued") return "";
   const active=downloads.filter(x=>x.state==="downloading"||x.state==="retrying");
   if(active.length>=settingsCache.max_concurrent_downloads) return "Waiting for a free slot";
+  // The per-site limit is a connection budget: a split-file download
+  // holds several of its connections.
   const lim=settingsCache.max_per_domain, key=domainKey(d.url);
-  if(lim && active.filter(x=>domainKey(x.url)===key).length>=lim)
-    return "Waiting — "+lim+" already downloading from "+key;
+  const used=active.filter(x=>domainKey(x.url)===key).reduce((n,x)=>n+Math.max(1,x.connections||1),0);
+  if(lim && used>=lim)
+    return "Waiting — site connection limit ("+lim+") reached for "+key;
   return "";
 }
 
@@ -1584,6 +1587,7 @@ function renderSheet(){
       '<dt>Status</dt><dd><span class="badge badge-'+d.state+'">'+d.state+'</span></dd>'+
       '<dt>Progress</dt><dd class="mono">'+fmtBytes(d.received)+' / '+fmtBytes(d.size)+' ('+Math.round(pct(d)*100)+'%)</dd>'+
       '<dt>Speed</dt><dd class="mono">'+fmtSpeed(d.speedBps)+'</dd>'+
+      '<dt>Connections</dt><dd class="mono">'+((d.state==="downloading"||d.state==="retrying") && d.connections ? d.connections : "—")+'</dd>'+
       '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading" && d.speedBps>0 ? fmtEta((d.size-d.received)/d.speedBps) : "—")+'</dd>'+
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
       '<dt>Source</dt><dd class="mono" style="font-size:10.5px">'+esc(d.url)+'</dd>'+
@@ -2042,6 +2046,13 @@ function settingsPanes(){
       '</div>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately.</p>'+
       '</div>'+
+      '<div class="field"><label class="label" for="setConnections">Connections per download</label>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+
+        '<input class="input mono" type="number" min="1" max="8" step="1" id="setConnections" value="'+esc(settingsCache.connections_per_download||1)+'" style="flex:1;width:auto">'+
+        '<button class="btn btn-primary btn-sm" id="setConnSave">Save</button>'+
+      '</div>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Large files (8 MB+) on servers that support it are split across this many connections. Each site gets '+esc(settingsCache.max_per_domain||6)+' connections in total, so more per file means fewer files from that site at once. 1 turns splitting off.</p>'+
+      '</div>'+
       switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
       '<div class="field"><label class="label" for="setDupPolicy">When a link was already downloaded</label>'+
       '<select class="input" id="setDupPolicy" data-input="duplicate_policy" style="width:auto">'+
@@ -2097,6 +2108,16 @@ async function settingsDialog(){
         const val=Math.max(SLOT_MIN,Math.min(SLOT_MAX,Math.round(+maxInput.value)));
         maxInput.value=val;
         try{ settingsCache=await patch("/api/settings",{max_concurrent_downloads:val}); toast("ok","Saved — "+val+" download"+(val!==1?"s":"")+" at once"); render(); }
+        catch(err){ toast("err","Couldn't save setting",err.message); }
+      };
+    }
+    const connInput=dlg.querySelector("#setConnections"), connSave=dlg.querySelector("#setConnSave");
+    if(connInput && connSave){
+      connInput.addEventListener("keydown",e=>{ if(e.key==="Enter") connSave.click(); });
+      connSave.onclick=async()=>{
+        const val=Math.max(1,Math.min(8,Math.round(+connInput.value)||1));
+        connInput.value=val;
+        try{ settingsCache=await patch("/api/settings",{connections_per_download:val}); toast("ok","Saved — "+val+" connection"+(val!==1?"s":"")+" per download"); }
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }

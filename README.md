@@ -67,10 +67,23 @@ python -m pytest                      # ~15 s, local server only
   stopped (when the server supports byte ranges). A connection that made
   progress resets the retry counter, so a flaky but working download is never
   marked failed; one that gets nowhere gives up after 30 attempts.
-- **At most 6 downloads run at once per site** (e.g. every
+- **Large files are split across several connections** (Settings →
+  Downloads → "Connections per download", default 4; 1 turns it off) when
+  the file is 8 MB or more and the server supports resumable ranges. Progress
+  per piece is kept in a `<file>.part.segments` file next to the `.part`, so
+  split downloads resume after a pause or restart too.
+- **Each site gets 6 connections in total** (e.g. every
   `*.trafficdeposit.com` host counts as one site), on top of the global
-  "Downloads at once" setting. Extra downloads wait in the queue, and the row
-  says why.
+  "Downloads at once" setting. A split download uses several of them, so
+  with the default of 4, one site runs a 4-connection file plus a
+  2-connection file. Extra downloads wait in the queue, and the row says why.
+- **Chrome's page address is sent as the Referer**, since many CDNs refuse
+  or throttle downloads without one.
+- **Expired links can be refreshed**: right-click an unfinished download →
+  **Refresh link…** and paste a new URL; downloaded data is kept when the
+  server still has the same file. Starting the same download again from
+  Chrome does this automatically when it clearly matches a failed or paused
+  download (same site, and the same filename, ETag or size).
 - **Quitting doesn't lose progress**: interrupted downloads resume on the
   next launch. Downloads you paused yourself stay paused.
 - **Cancel** stops a download and deletes its partial file. **Remove** takes

@@ -166,3 +166,16 @@ def test_expired_link_hint_on_403(ui, server, wait):
     task = mgr.tasks[mgr.add_download(f"{server}/gone?status=403", "gone.bin")]
     assert wait(lambda: task.status == S.FAILED)
     assert page.wait_js(page.row(task.id, ".rbot") + "?.textContent.includes('Link may have expired')")
+
+
+def test_connections_setting_saves(ui):
+    mgr, page = ui()
+    page.js("document.getElementById('settingsBtn').click()")
+    assert page.wait_js("!!document.querySelector('[data-st=\"Downloads\"]')")
+    page.js("document.querySelector('[data-st=\"Downloads\"]').click()")
+    assert page.wait_js("!!document.getElementById('setConnections')")
+    assert page.js("document.getElementById('setConnections').value") == "4"
+    page.js("document.getElementById('setConnections').value = '2'")
+    page.js("document.getElementById('setConnSave').click()")
+    assert page.wait_js("settingsCache.connections_per_download === 2")
+    assert mgr.settings.connections_per_download == 2

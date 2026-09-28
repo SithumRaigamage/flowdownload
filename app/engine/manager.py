@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
+from app.engine import segmented
 from app.engine.paths import dedupe_path, domain_key
 from app.engine.probe import validate_download_url
 from app.engine.settings import Settings
@@ -18,10 +19,12 @@ from app.engine.storage import Storage
 
 ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 EXTERNAL_POLL_INTERVAL_MS = 2000
-# Cap on simultaneous downloads from one domain, independent of the global
-# max_concurrent_downloads. Many parallel streams to the same CDN make it
-# reset/stall connections, which shows up as a wall of RETRYING tasks.
+# Connection budget per site (domain_key), independent of the global
+# max_concurrent_downloads file count. Many parallel streams to the same CDN
+# make it reset/stall connections, which shows up as a wall of RETRYING
+# tasks. A split-file download uses several connections from this budget.
 MAX_PER_DOMAIN = 6
+MAX_CONNECTIONS_PER_DOWNLOAD = 8
 # Progress ticks arrive ~4x/s per download; persisting each one meant dozens
 # of SQLite commits per second on the main thread. The UI still gets every
 # tick via task_updated -- only the DB write is throttled. Nothing is lost by
@@ -151,7 +154,12 @@ class DownloadManager(QObject):
             if task.status in ACTIVE_STATUSES:
                 task.status = DownloadStatus.QUEUED
                 self._log(task.id, "info", "Interrupted by app restart — resuming")
-            if os.path.exists(task.part_path):
+            # A split-file download's .part is preallocated to full size, so
+            # its real progress comes from the segment sidecar instead.
+            split_progress = segmented.load_progress(task.part_path)
+            if split_progress is not None:
+                task.downloaded_bytes = split_progress
+            elif os.path.exists(task.part_path):
                 task.downloaded_bytes = os.path.getsize(task.part_path)
             task.updated_at = time.time()
             self.storage.save(task)
@@ -252,7 +260,7 @@ class DownloadManager(QObject):
             self.task_updated.emit(task_id)
             return
         if (self._active_count() >= self.settings.max_concurrent_downloads
-                or self._active_count_for_domain(domain_key(task.url)) >= MAX_PER_DOMAIN):
+                or self._connections_used(domain_key(task.url)) >= MAX_PER_DOMAIN):
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -333,11 +341,12 @@ class DownloadManager(QObject):
 
     @staticmethod
     def _discard_partial(task: DownloadTask) -> None:
-        """Delete a cancelled task's .part file -- nothing will ever resume it."""
-        try:
-            os.remove(task.part_path)
-        except OSError:
-            pass  # never started writing, or already gone
+        """Delete a cancelled task's partial data -- nothing will ever resume it."""
+        for path in (task.part_path, task.segments_path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass  # never started writing, or already gone
         task.downloaded_bytes = 0
 
     def remove(self, task_id: str) -> None:
@@ -353,8 +362,8 @@ class DownloadManager(QObject):
                 _STUCK_WORKERS.append(worker)
 
         task = self.tasks.pop(task_id, None)
-        if task is not None and os.path.exists(task.part_path):
-            os.remove(task.part_path)
+        if task is not None:
+            self._discard_partial(task)
 
         self.storage.delete(task_id)
         self.history.pop(task_id, None)
@@ -402,9 +411,10 @@ class DownloadManager(QObject):
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
 
-    def _active_count_for_domain(self, domain: str) -> int:
-        return sum(1 for t in self.tasks.values()
-                   if t.status in ACTIVE_STATUSES and domain_key(t.url) == domain)
+    def _connections_used(self, domain: str, exclude: str | None = None) -> int:
+        """Connections active downloads hold on this site's budget."""
+        return sum(max(1, t.connections) for t in self.tasks.values()
+                   if t.status in ACTIVE_STATUSES and t.id != exclude and domain_key(t.url) == domain)
 
     def _dispatch_queue(self) -> None:
         if self._shutting_down:
@@ -412,11 +422,11 @@ class DownloadManager(QObject):
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
-        per_domain: dict[str, int] = {}
+        per_domain: dict[str, int] = {}  # connections in use per site
         for t in self.tasks.values():
             if t.status in ACTIVE_STATUSES:
                 key = domain_key(t.url)
-                per_domain[key] = per_domain.get(key, 0) + 1
+                per_domain[key] = per_domain.get(key, 0) + max(1, t.connections)
         # Only auto-start QUEUED tasks. PAUSED tasks must wait for an explicit
         # Resume click — otherwise the dispatcher re-spawns them immediately
         # after the user clicks Pause, which made Pause All look broken.
@@ -436,11 +446,17 @@ class DownloadManager(QObject):
             if per_domain.get(key, 0) >= MAX_PER_DOMAIN:
                 continue
             self._spawn(task.id)
-            per_domain[key] = per_domain.get(key, 0) + 1
+            per_domain[key] = per_domain.get(key, 0) + max(1, task.connections)
             free_slots -= 1
 
     def _spawn(self, task_id: str) -> None:
         task = self.tasks[task_id]
+        # Grant what's left of the site's connection budget, up to the
+        # per-download setting. The worker reports back (connections_resolved)
+        # if it ends up using fewer, which frees the rest for other downloads.
+        wanted = max(1, min(int(self.settings.connections_per_download), MAX_CONNECTIONS_PER_DOWNLOAD))
+        free = MAX_PER_DOMAIN - self._connections_used(domain_key(task.url), exclude=task_id)
+        task.connections = max(1, min(wanted, free))
         task.status = DownloadStatus.DOWNLOADING
         task.error_message = ""
         task.updated_at = time.time()
@@ -454,12 +470,14 @@ class DownloadManager(QObject):
         worker = DownloadWorker(
             task.id, task.url, task.dest_path, task.etag, task.last_modified,
             task.cookie_header, self._session, referrer=task.referrer,
+            max_connections=task.connections,
         )
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)
         worker.metadata_resolved.connect(self._on_metadata_resolved)
         worker.digest_computed.connect(self._on_digest_computed)
         worker.size_unverified.connect(self._on_size_unverified)
+        worker.connections_resolved.connect(self._on_connections_resolved)
         worker.finished.connect(lambda tid=task_id: self._on_worker_finished(tid))
         self._workers[task_id] = worker
         worker.start()
@@ -549,6 +567,8 @@ class DownloadManager(QObject):
             status = DownloadStatus.QUEUED
         if status == DownloadStatus.CANCELLED:
             self._discard_partial(task)
+        if status not in ACTIVE_STATUSES:
+            task.connections = 0  # budget is only held while running
         task.status = status
         task.error_message = error_message
         task.speed_bps = 0.0
@@ -600,6 +620,20 @@ class DownloadManager(QObject):
             self.task_updated.emit(task_id)
         except Exception as exc:
             self._log(task_id, "error", f"digest handler error: {exc}")
+
+    def _on_connections_resolved(self, task_id: str, connections: int) -> None:
+        try:
+            task = self.tasks.get(task_id)
+            if task is None or task.status not in ACTIVE_STATUSES:
+                return
+            previous, task.connections = task.connections, connections
+            if connections > 1:
+                self._log(task_id, "info", f"Downloading over {connections} connections")
+            self.task_updated.emit(task_id)
+            if connections < previous:
+                self._dispatch_queue()  # budget was freed for other downloads
+        except Exception as exc:
+            self._log(task_id, "error", f"connections handler error: {exc}")
 
     def _on_size_unverified(self, task_id: str) -> None:
         self._log(

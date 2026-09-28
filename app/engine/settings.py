@@ -23,6 +23,10 @@ class Settings:
     # "skip" reuses the existing completed task instead of downloading again,
     # "overwrite" replaces the existing file with a fresh copy.
     duplicate_policy: str = "rename"
+    # Connections a single large download may split across (1 = never split).
+    # Drawn from the per-site budget, so more per file means fewer files at
+    # once from the same site.
+    connections_per_download: int = 4
 
     @classmethod
     def load(cls, path: str) -> "Settings":

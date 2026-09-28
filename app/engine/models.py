@@ -44,12 +44,20 @@ class DownloadTask:
     # Page the download was started from, sent as the Referer header. Many
     # CDNs refuse (or throttle) requests that arrive without one.
     referrer: str = ""
+    # Connections currently in use (in memory only, never persisted): counts
+    # against the per-site connection budget while the task is active.
+    connections: int = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
     @property
     def part_path(self) -> str:
         return self.dest_path + ".part"
+
+    @property
+    def segments_path(self) -> str:
+        # Split-file progress sidecar; see app/engine/segmented.py.
+        return self.part_path + ".segments"
 
     @property
     def progress(self) -> float:
