@@ -30,6 +30,8 @@ APP_VERSION = (ROOT / "VERSION").read_text().strip()
 datas = [
     (str(ROOT / "app" / "web" / "index.html"), "app/web"),
     (str(ROOT / "app" / "AppIcon.icns"), "Resources"),
+    # Read at runtime by app/version.py so the UI can show the build version.
+    (str(ROOT / "VERSION"), "."),
 ]
 
 # PySide6 ships a handful of optional plugins/QML modules; asking for the full

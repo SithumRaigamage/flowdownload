@@ -180,28 +180,31 @@ def handle_message(message: dict) -> dict:
     # Auto-folder rule (matches the engine's apply_auto_folder):
     # when the user has opted in, route by extension into a subfolder
     # so videos land in <Downloads>/Video, archives in /Archives, etc.
-    base_dir = settings.download_dir
+    # apply_auto_folder_for_path returns the full path, filename included.
     if getattr(settings, "auto_folder_by_type", False):
         from app.engine.manager import apply_auto_folder_for_path
-        base_dir = apply_auto_folder_for_path(filename, base_dir)
+        dest_path = apply_auto_folder_for_path(filename, settings.download_dir)
+    else:
+        dest_path = os.path.join(settings.download_dir, filename)
 
     # Tasks already queued (here or in the running app) that haven't written
     # a byte yet have no .part file for dedupe_path's filesystem check to
     # see -- without this, two downloads handed off in quick succession with
     # the same suggested filename would collide and corrupt each other.
     reserved = {t.dest_path for t in storage.load_all()}
-    dest_path = os.path.join(base_dir, filename)
 
-    if existing_match is not None and policy == "overwrite":
-        if os.path.exists(existing_match.dest_path):
-            os.remove(existing_match.dest_path)
+    overwrite = existing_match is not None and policy == "overwrite"
+    if overwrite:
+        # The old file stays until the new download completes -- the worker
+        # swaps it in atomically at the end (see DownloadManager.add_download).
         storage.delete(existing_match.id)
         reserved.discard(existing_match.dest_path)
         dest_path = existing_match.dest_path
     # "rename" (default) falls through unchanged -- dedupe_path below already
     # picks a fresh filename on any collision.
 
-    dest_path = dedupe_path(dest_path, reserved)
+    if not overwrite:
+        dest_path = dedupe_path(dest_path, reserved)
     task = DownloadTask(
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
         status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",

@@ -260,6 +260,10 @@ class DownloadWorker(QThread):
         downloaded_since_emit = 0
         last_emit = time.monotonic()
 
+        # The destination folder may not exist yet: an auto-folder subfolder
+        # (Video/, Audio/, ...) on first use, or a download folder the user
+        # deleted since choosing it.
+        os.makedirs(os.path.dirname(self.part_path), exist_ok=True)
         with open(self.part_path, mode) as f:
             for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                 if self._pause_event.is_set():

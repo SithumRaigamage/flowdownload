@@ -24,6 +24,7 @@ from app.engine.manager import DownloadManager, prune_empty_auto_folder_dir
 from app.engine.models import DownloadStatus
 from app.engine.probe import guess_filename_from_url, probe_remote_filename
 from app.engine.settings import Settings
+from app.version import APP_VERSION
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 NATIVE_HOST_MANIFEST = Path.home() / (
@@ -344,7 +345,8 @@ def create_app(
         # and this endpoint is 127.0.0.1-only, loaded solely by the app's own
         # QWebEngineView.
         html = (FRONTEND_DIR / "index.html").read_text()
-        response = HTMLResponse(html.replace("__FLOWDOWNLOAD_TOKEN__", token))
+        html = html.replace("__FLOWDOWNLOAD_TOKEN__", token).replace("__FLOWDOWNLOAD_VERSION__", APP_VERSION)
+        response = HTMLResponse(html)
         # QWebEngineView keeps a persistent on-disk HTTP cache across app
         # launches (it's not a throwaway browser tab) -- without this, an
         # earlier revision of this page served during development could get

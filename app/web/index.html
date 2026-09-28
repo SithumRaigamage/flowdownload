@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlowDownload</title>
+<script>try{ if(localStorage.getItem("fd-theme")==="dark") document.documentElement.classList.add("dark"); }catch(_){}</script>
 <style>
 /* ============================================================
    THEME TOKENS — shadcn/ui variable names.
@@ -244,6 +245,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 .diskbar{height:5px;border-radius:99px;background:var(--muted);overflow:hidden}
 .diskbar i{display:block;height:100%;background:var(--primary);border-radius:99px}
 .side-foot{margin-top:auto;padding:8px}
+.app-version{padding:6px 12px 0;font-size:10.5px;color:var(--muted-foreground)}
 
 /* ---------- toolbar ---------- */
 .main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
@@ -664,7 +666,6 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 </style>
 </head>
 <body>
-<!-- BUILD STAMP 2026-09-02-black-controls-v3 -->
 <div class="app">
 
   <div class="statusbar glass">
@@ -714,6 +715,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
           Settings
         </button>
+        <div class="app-version mono" id="appVersion"></div>
       </div>
     </nav>
 
@@ -737,7 +739,7 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
           <span class="mono" id="slotCount" style="min-width:18px;text-align:center">3</span>
           <button class="btn btn-ghost btn-icon btn-sm" id="incSlot" aria-label="More concurrent downloads" title="More concurrent downloads">+</button>
         </div>
-        <button class="btn btn-outline" id="startAllBtn" title="Start all paused and queued downloads">
+        <button class="btn btn-outline" id="startAllBtn" title="Start all paused, queued and failed downloads">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
           Start all
         </button>
@@ -786,6 +788,8 @@ select.input{cursor:pointer;appearance:none;padding-right:26px;
 <script>
 "use strict";
 const TOKEN = "__FLOWDOWNLOAD_TOKEN__";
+const APP_VERSION = "__FLOWDOWNLOAD_VERSION__";
+document.getElementById("appVersion").textContent = "FlowDownload v"+APP_VERSION;
 const KB=1024, MB=KB*1024, GB=MB*1024;
 
 /* ---------- API ---------- */
@@ -968,7 +972,7 @@ function renderLibFilters(){
 }
 
 function renderViewNav(){
-  const dlCount=downloads.filter(d=>d.state!=="cancelled").length;
+  const dlCount=downloads.length;
   const libCount=downloads.filter(d=>isMediaDownload(d)).length;
   document.getElementById("navCountDownloads").textContent=dlCount;
   document.getElementById("navCountLibrary").textContent=libCount;
@@ -1194,7 +1198,6 @@ function openLibPlayer(id){
 
   if(!isMedia) return;
 
-  console.log("[libPlayer] opening custom controls player for", id);
   // Capture references to the custom controls up front so we can
   // wire them up immediately. Without this, the buttons only become
   // functional after startPlayback() runs (i.e., after the first
@@ -1777,10 +1780,8 @@ document.getElementById("decSlot").addEventListener("click", async () => {
   const cur = +settingsCache.max_concurrent_downloads;
   if(cur <= SLOT_MIN){ toast("warn","Minimum "+SLOT_MIN+" concurrent download"); return; }
   const next = cur - 1;
-  console.log("decSlot: cur="+cur+" next="+next);
   try{
     settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
-    console.log("decSlot: server responded max="+settingsCache.max_concurrent_downloads);
     render();
   }catch(err){ toast("err","Couldn't decrease slots",err.message); }
 });
@@ -1789,15 +1790,17 @@ document.getElementById("incSlot").addEventListener("click", async (e) => {
   const cur = +settingsCache.max_concurrent_downloads;
   if(cur >= SLOT_MAX){ toast("warn","Maximum "+SLOT_MAX+" concurrent downloads"); return; }
   const next = cur + 1;
-  console.log("incSlot: cur="+cur+" next="+next);
   try{
     settingsCache = await patch("/api/settings",{max_concurrent_downloads:next});
-    console.log("incSlot: server responded max="+settingsCache.max_concurrent_downloads);
     render();
   }catch(err){ toast("err","Couldn't increase slots",err.message); }
 });
+function toggleTheme(){
+  const dark=document.documentElement.classList.toggle("dark");
+  try{ localStorage.setItem("fd-theme", dark?"dark":"light"); }catch(_){}
+}
 document.getElementById("themeBtn").addEventListener("click",()=>{
-  document.documentElement.classList.toggle("dark");
+  toggleTheme();
 });
 
 /* ---------- view nav ---------- */
@@ -1979,7 +1982,10 @@ function settingsPanes(){
     Advanced: '<div style="padding-top:10px;display:flex;gap:7px;flex-wrap:wrap">'+
       '<button class="btn btn-outline btn-sm" id="setClearCompleted">Clear completed</button>'+
       '<button class="btn btn-outline btn-sm" style="color:var(--destructive)" id="setResetAll">Reset all settings</button>'+
-      '</div><p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Partial downloads are always kept on disk after a failure or pause, so a resume days later just picks up where it left off.</p>'
+      '</div><p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Partial downloads are always kept on disk after a failure or pause, so a resume days later just picks up where it left off.</p>',
+    About: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>FlowDownload</div><p>Resumable download manager for macOS</p></div>'+
+      '<span class="badge mono">v'+esc(APP_VERSION)+'</span></div>'+
+      '<div class="setrow"><div class="txt"><div>Data folder</div><p class="mono">~/.flowdownload</p></div></div>'
   };
 }
 
@@ -1991,7 +1997,7 @@ async function settingsDialog(){
   try{ settingsCache=await getJSON("/api/settings"); }
   catch(err){ toast("err","Couldn't load settings",err.message); }
   try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
-  const tabs=["General","Downloads","Chrome","Advanced"];
+  const tabs=["General","Downloads","Chrome","Advanced","About"];
   const panes=settingsPanes();
 
   const dlg=overlay('<div class="dialog" style="max-width:540px" role="dialog" aria-modal="true" aria-labelledby="setTitle">'+
@@ -2095,7 +2101,7 @@ document.addEventListener("keydown",e=>{
   if(meta&&e.key==="f"){ e.preventDefault(); document.getElementById("search").focus(); return; }
   if(meta&&e.key===","){ e.preventDefault(); settingsDialog(); return; }
   if(meta&&e.key==="/"){ e.preventDefault(); shortcutsDialog(); return; }
-  if(meta&&e.shiftKey&&e.key.toLowerCase()==="l"){ e.preventDefault(); document.documentElement.classList.toggle("dark"); return; }
+  if(meta&&e.shiftKey&&e.key.toLowerCase()==="l"){ e.preventDefault(); toggleTheme(); return; }
   if(typing) return;
   if(meta&&e.key.toLowerCase()==="a"&&ui.view==="downloads"){ e.preventDefault(); toggleSelectAll(); return; }
   if(e.key===" "&&ui.activeId){ e.preventDefault();
@@ -2189,7 +2195,11 @@ async function boot(){
   setView("downloads");
   render();
   connectWS();
-  setInterval(async()=>{ try{ diskCache=await getJSON("/api/disk"); renderSystem(); }catch(_){} }, 30000);
+  setInterval(async()=>{
+    try{ diskCache=await getJSON("/api/disk"); }catch(_){}
+    try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
+    renderSystem();
+  }, 30000);
 }
 boot();
 </script>

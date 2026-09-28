@@ -62,6 +62,10 @@ class DownloadManager(QObject):
         self.settings = settings
         self.tasks: dict[str, DownloadTask] = {}
         self._workers: dict[str, DownloadWorker] = {}
+        # Tasks the user resumed while their previous worker was still
+        # unwinding from a pause. They're held QUEUED (the worker's final
+        # PAUSED signal is ignored for them) and dispatched once it exits.
+        self._resume_pending: set[str] = set()
         # Per-task event log for the UI's detail view -- in-memory only
         # (not persisted), since it's a debugging aid, not state the app
         # needs to survive a restart.
@@ -127,7 +131,7 @@ class DownloadManager(QObject):
         # applies the same os.path.basename() boundary for the Chrome
         # extension hand-off.
         filename = os.path.basename(filename) or "download"
-        dest_path = os.path.join(self.settings.download_dir, filename)
+        dest_path = self.apply_auto_folder(filename)
 
         # Read from storage rather than self.tasks: a download the Chrome
         # extension just queued via the native host lands in storage
@@ -135,6 +139,7 @@ class DownloadManager(QObject):
         # EXTERNAL_POLL_INTERVAL_MS, so self.tasks alone could still miss it.
         reserved = {t.dest_path for t in self.storage.load_all()}
 
+        overwrite = False
         dup = self.check_dedupe(url)
         if dup.is_duplicate:
             if self.settings.duplicate_policy == "skip":
@@ -143,17 +148,21 @@ class DownloadManager(QObject):
             if self.settings.duplicate_policy == "overwrite":
                 old = self.tasks.pop(dup.existing_task_id, None)
                 if old is not None:
-                    if os.path.exists(old.dest_path):
-                        os.remove(old.dest_path)
+                    # The old file is left in place: the new download writes
+                    # to <dest>.part and _finalize's os.replace swaps it in
+                    # only once it completes, so a failed re-download never
+                    # costs the user the copy they already had.
                     self.storage.delete(old.id)
                     self.history.pop(old.id, None)
                     reserved.discard(old.dest_path)
                     self.task_removed.emit(old.id)
                     dest_path = old.dest_path
+                    overwrite = True
             # "rename" (default) falls through unchanged -- dedupe_path below
             # already picks a fresh filename on any collision.
 
-        dest_path = dedupe_path(dest_path, reserved)
+        if not overwrite:
+            dest_path = dedupe_path(dest_path, reserved)
         task = DownloadTask(
             url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
             status=DownloadStatus.QUEUED,
@@ -183,10 +192,19 @@ class DownloadManager(QObject):
 
     def start(self, task_id: str) -> None:
         """User explicitly wants this task running now (Resume / Retry click)."""
+        task = self.tasks[task_id]
         existing = self._workers.get(task_id)
         if existing is not None and existing.isRunning():
+            # Still unwinding from a pause -- starting now would put two
+            # workers on one .part file. Queue it; _on_worker_finished
+            # dispatches it as soon as the old worker is gone.
+            self._resume_pending.add(task_id)
+            task.status = DownloadStatus.QUEUED
+            task.error_message = ""
+            task.updated_at = time.time()
+            self.storage.save(task)
+            self.task_updated.emit(task_id)
             return
-        task = self.tasks[task_id]
         if (self._active_count() >= self.settings.max_concurrent_downloads
                 or self._active_count_for_domain(_domain_key(task.url)) >= MAX_PER_DOMAIN):
             task.status = DownloadStatus.QUEUED
@@ -235,10 +253,15 @@ class DownloadManager(QObject):
             self.task_updated.emit(task_id)
 
     def resume_all(self) -> None:
-        """Resume all paused, queued, failed, and cancelled tasks."""
+        """Resume all paused, queued, and failed tasks.
+
+        Cancelled tasks are left alone -- the user stopped those on purpose.
+        """
         for task in self.tasks.values():
             if task.status in (DownloadStatus.PAUSED, DownloadStatus.QUEUED,
-                               DownloadStatus.FAILED, DownloadStatus.CANCELLED):
+                               DownloadStatus.FAILED):
+                if task.id in self._workers:
+                    self._resume_pending.add(task.id)
                 task.status = DownloadStatus.QUEUED
                 task.error_message = ""
                 task.updated_at = time.time()
@@ -247,18 +270,32 @@ class DownloadManager(QObject):
         self._dispatch_queue()
 
     def cancel(self, task_id: str) -> None:
+        self._resume_pending.discard(task_id)
         worker = self._workers.get(task_id)
         if worker is not None:
+            # The worker's CANCELLED signal discards the partial file once
+            # it has closed it (see _do_status_changed).
             worker.cancel()
         else:
             task = self.tasks.get(task_id)
             if task is not None:
                 task.status = DownloadStatus.CANCELLED
+                self._discard_partial(task)
                 task.updated_at = time.time()
                 self.storage.save(task)
                 self.task_updated.emit(task_id)
 
+    @staticmethod
+    def _discard_partial(task: DownloadTask) -> None:
+        """Delete a cancelled task's .part file -- nothing will ever resume it."""
+        try:
+            os.remove(task.part_path)
+        except OSError:
+            pass  # never started writing, or already gone
+        task.downloaded_bytes = 0
+
     def remove(self, task_id: str) -> None:
+        self._resume_pending.discard(task_id)
         worker = self._workers.pop(task_id, None)
         if worker is not None:
             worker.cancel()
@@ -282,19 +319,20 @@ class DownloadManager(QObject):
         self._dispatch_queue()
 
     def shutdown(self) -> None:
-        """Cancel every running download and wait for threads to exit cleanly.
+        """Stop every running download and wait for threads to exit cleanly.
 
-        Uses cancel (not pause) so workers exit at the next chunk boundary
-        rather than leaving a half-written .part file. Closes the shared
+        Uses pause, not cancel: both make workers exit at the next chunk
+        boundary, but a cancel discards the .part file, and quitting the
+        app must keep partial downloads resumable. Closes the shared
         requests session to interrupt any worker blocked in a network syscall.
         Workers that are still alive after the wait window are kept alive in
         the module-level _STUCK_WORKERS list so they are not garbage-collected
         while running -- which would trigger QThread's "destroyed while still
         running" abort. The process is exiting anyway, so leaking them is fine.
         """
-        # Cancel all workers so they exit at the next chunk boundary.
+        # Pause all workers so they exit at the next chunk boundary.
         for worker in list(self._workers.values()):
-            worker.cancel()
+            worker.pause()
         # Close the shared session to unblock any worker stuck in a syscall.
         try:
             self._session.close()
@@ -302,7 +340,7 @@ class DownloadManager(QObject):
             pass
         # Wait for workers to finish. Workers stuck in network I/O will exit
         # once the socket times out (READ_TIMEOUT=10s) -- the RequestException
-        # path sees the cancel event and returns via the Paused branch.
+        # path sees the pause event and returns without retrying.
         for worker in list(self._workers.values()):
             if not worker.wait(5000):
                 # Still alive (stuck in network I/O). Move to module-level
@@ -336,6 +374,8 @@ class DownloadManager(QObject):
         for task in candidates:
             if free_slots <= 0:
                 break
+            if task.id in self._workers:
+                continue  # previous worker still unwinding; never run two on one .part
             # A domain at its cap is skipped, not a stopping point -- a queued
             # task from another site can still take the free slot.
             key = _domain_key(task.url)
@@ -371,6 +411,7 @@ class DownloadManager(QObject):
         worker.start()
 
     def _on_worker_finished(self, task_id: str) -> None:
+        self._resume_pending.discard(task_id)
         worker = self._workers.pop(task_id, None)
         if worker is not None:
             # Wait for the thread to actually stop before the Python wrapper can
@@ -445,6 +486,11 @@ class DownloadManager(QObject):
         if task is None:
             return
         status = DownloadStatus(status_value)
+        if status == DownloadStatus.PAUSED and task_id in self._resume_pending:
+            # Resumed while this worker was still pausing: stay queued.
+            status = DownloadStatus.QUEUED
+        if status == DownloadStatus.CANCELLED:
+            self._discard_partial(task)
         task.status = status
         task.error_message = error_message
         task.speed_bps = 0.0
