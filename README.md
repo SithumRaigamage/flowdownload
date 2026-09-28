@@ -54,6 +54,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Tests
+
+```bash
+pip install -r requirements-dev.txt   # once
+python -m pytest                      # ~15 s, local server only
+```
+
 ## How downloads behave
 
 - **Dropped connections retry automatically** and resume from where they
@@ -137,6 +144,6 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
 ## Roadmap
 
 Known gaps and possible future work (platform support beyond macOS, code
-signing, bandwidth throttling, an actual automated test suite, etc.) are
+signing, bandwidth throttling, UI tests, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 

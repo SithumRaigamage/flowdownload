@@ -77,16 +77,11 @@ retroactively pulls in what's already in `chrome://downloads`.
 
 ## Testing
 
-### No automated test suite checked into the repo
-Everything described as "verified" throughout development (resume/hash
-integrity, flaky-connection retry, crash-restart persistence, concurrency
-limits, the 416/If-Range correctness fixes, cookie forwarding, the native
-messaging round-trip) was checked with one-off scripts run during that
-session, not committed anywhere — so there's currently nothing in this
-repo you can re-run to catch a regression after future changes.
-
-Worth turning into a real `pytest` suite under a `tests/` directory,
-reusing the same approach (a tiny local `http.server`-based fixture
-serving a throttled, Range-aware file) rather than hitting real external
-servers. The individual test scenarios from that session are the natural
-starting point for what the suite should cover.
+### Test suite covers the engine, not the UI
+`tests/` (run with `venv/bin/python -m pytest`) exercises the download
+engine, native host and API page against a local `http.server` fixture:
+retries and backoff, the per-site limit, pause/resume, cancel, quit and
+relaunch, overwrite, auto-folder, and progress-write throttling. Not
+covered: the web UI in `app/web/index.html` (no browser-driven tests), the
+Qt tray/window layer, ffmpeg transcoding, and the real Chrome
+native-messaging round-trip.
