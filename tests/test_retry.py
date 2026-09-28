@@ -6,7 +6,7 @@ import requests
 
 from app.engine import downloader, retry_policy
 from app.engine.downloader import DownloadWorker
-from tests.conftest import DATA
+from tests.conftest import DATA, REQUESTS
 
 
 @pytest.fixture
@@ -23,8 +23,8 @@ def attempts(monkeypatch):
     return seen
 
 
-def run_worker(url, tmp_path, wait):
-    worker = DownloadWorker("t", url, str(tmp_path / "out.bin"), "", "", "", requests.Session())
+def run_worker(url, tmp_path, wait, referrer=""):
+    worker = DownloadWorker("t", url, str(tmp_path / "out.bin"), "", "", "", requests.Session(), referrer=referrer)
     statuses: list[str] = []
     worker.status_changed.connect(lambda _tid, status, _msg: statuses.append(status))
     worker.start()
@@ -61,6 +61,21 @@ def test_permanent_http_error_fails_without_retry(server, tmp_path, wait, attemp
     statuses = run_worker(f"{server}/f?status=404", tmp_path, wait)
     assert statuses == ["failed"]
     assert attempts == []
+
+
+def test_referer_is_sent_on_every_connection(server, tmp_path, wait, attempts):
+    REQUESTS.clear()
+    statuses = run_worker(f"{server}/ref?drop=100000", tmp_path, wait, referrer="https://page.test/watch")
+    assert statuses[-1] == "completed"
+    sent = [headers.get("Referer") for path, headers in REQUESTS if path.startswith("/ref")]
+    assert len(sent) >= 2  # first connection + at least one reconnect
+    assert set(sent) == {"https://page.test/watch"}
+
+
+def test_no_referer_header_when_unknown(server, tmp_path, wait, attempts):
+    REQUESTS.clear()
+    run_worker(f"{server}/noref", tmp_path, wait)
+    assert all("Referer" not in headers for path, headers in REQUESTS if path.startswith("/noref"))
 
 
 def test_backoff_is_capped_and_gives_up():

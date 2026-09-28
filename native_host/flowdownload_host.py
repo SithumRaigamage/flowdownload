@@ -126,6 +126,13 @@ def _write_extension_state(profile_id: str, profile_name: str) -> None:
         traceback.print_exc(file=sys.stderr)
 
 
+def _safe_referrer(value) -> str:
+    """Only an http(s) page URL is worth sending on as a Referer header."""
+    if isinstance(value, str) and value.lower().startswith(("http://", "https://")):
+        return value
+    return ""
+
+
 def handle_message(message: dict) -> dict:
     action = message.get("action")
     profile_id = message.get("profile_id") or "unknown"
@@ -214,6 +221,7 @@ def handle_message(message: dict) -> dict:
     task = DownloadTask(
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
         status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",
+        referrer=_safe_referrer(message.get("referrer")),
     )
     # This process's reserved-set snapshot and the running app's aren't
     # coordinated -- storage's UNIQUE index on dest_path turns a same-instant

@@ -65,7 +65,7 @@ chrome.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId !== MENU_ID) return;
   const url = info.linkUrl || info.srcUrl;
   if (!url) return;
-  sendToFlowDownload(url);
+  sendToFlowDownload(url, info.pageUrl || info.frameUrl || "");
 });
 
 // Every Chrome download gets rerouted here: cancel Chrome's own attempt the
@@ -76,15 +76,17 @@ chrome.contextMenus.onClicked.addListener((info) => {
 chrome.downloads.onCreated.addListener((item) => {
   if (!item.url || !FETCHABLE_URL_RE.test(item.url)) return;
   chrome.downloads.cancel(item.id, () => chrome.downloads.erase({ id: item.id }));
-  sendToFlowDownload(item.url);
+  sendToFlowDownload(item.url, item.referrer || "");
 });
 
-function sendToFlowDownload(url) {
+// `referrer` is the page the download came from. It's forwarded as the
+// Referer header because many CDNs reject or throttle hotlinked requests.
+function sendToFlowDownload(url, referrer) {
   chrome.cookies.getAll({ url }, (cookies) => {
     const cookieHeader = (cookies || []).map((c) => `${c.name}=${c.value}`).join("; ");
     getProfile((profile) => {
       chrome.runtime.sendNativeMessage(NATIVE_HOST, {
-        url, cookie: cookieHeader,
+        url, cookie: cookieHeader, referrer,
         profile_id: profile.id, profile_name: profile.name,
       }, (response) => {
         if (chrome.runtime.lastError) {

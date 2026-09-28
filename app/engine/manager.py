@@ -414,7 +414,7 @@ class DownloadManager(QObject):
 
         worker = DownloadWorker(
             task.id, task.url, task.dest_path, task.etag, task.last_modified,
-            task.cookie_header, self._session,
+            task.cookie_header, self._session, referrer=task.referrer,
         )
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)

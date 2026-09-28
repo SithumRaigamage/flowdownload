@@ -26,6 +26,7 @@ class DownloadOut(BaseModel):
     has_cookie: bool
     digest_sha256: str
     digest_verified: bool
+    referrer: str
     created_at: float
     updated_at: float
 
@@ -50,6 +51,7 @@ class DownloadOut(BaseModel):
             has_cookie=bool(task.cookie_header),
             digest_sha256=task.digest_sha256,
             digest_verified=task.digest_verified,
+            referrer=task.referrer,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )

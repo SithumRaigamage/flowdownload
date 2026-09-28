@@ -41,6 +41,9 @@ class DownloadTask:
     # False means the server had no Digest header; True means it matched;
     # a dedicated "failed" status for mismatch is overkill since we log it.
     digest_verified: bool = False
+    # Page the download was started from, sent as the Referer header. Many
+    # CDNs refuse (or throttle) requests that arrive without one.
+    referrer: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -69,6 +72,7 @@ class DownloadTask:
             self.cookie_header,
             self.digest_sha256,
             self.digest_verified,
+            self.referrer,
             self.created_at,
             self.updated_at,
         )
@@ -78,7 +82,7 @@ class DownloadTask:
         (
             id_, url, dest_path, filename, total_bytes, downloaded_bytes,
             status, error_message, etag, last_modified, cookie_header,
-            digest_sha256, digest_verified, created_at, updated_at,
+            digest_sha256, digest_verified, referrer, created_at, updated_at,
         ) = row
         return cls(
             id=id_,
@@ -94,6 +98,7 @@ class DownloadTask:
             cookie_header=cookie_header,
             digest_sha256=digest_sha256 or "",
             digest_verified=bool(digest_verified),
+            referrer=referrer or "",
             created_at=created_at,
             updated_at=updated_at,
         )

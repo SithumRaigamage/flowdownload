@@ -843,7 +843,7 @@ function normalize(t){
     id:t.id, name:t.filename || t.dest_path.split("/").pop(), host:hostOf(t.url), url:t.url, dest:t.dest_path,
     size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
     error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
-    hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
+    referrer:t.referrer||"", hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
   };
 }
 function upsert(raw){
@@ -1583,11 +1583,12 @@ function renderSheet(){
       '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading" && d.speedBps>0 ? fmtEta((d.size-d.received)/d.speedBps) : "—")+'</dd>'+
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
       '<dt>Source</dt><dd class="mono" style="font-size:10.5px">'+esc(d.url)+'</dd>'+
+      '<dt>Referrer</dt><dd class="mono" style="font-size:10.5px">'+(d.referrer?esc(d.referrer):"none")+'</dd>'+
     '</dl><div class="hr"></div><div class="sect">Resume support</div><dl class="kv">'+
       '<dt>Accept-Ranges</dt><dd>'+(d.acceptRanges?'<span style="color:var(--success)">bytes — resumable</span>':'<span style="color:var(--warning)">not confirmed yet — may restart on failure</span>')+'</dd>'+
       '<dt>ETag</dt><dd class="mono" style="font-size:10.5px">'+esc(d.etag||"none")+'</dd>'+
       '<dt>Validator</dt><dd>If-Range checked on every resume</dd>'+
-      '<dt>Retry policy</dt><dd>exponential backoff, retried until it succeeds</dd>'+
+      '<dt>Retry policy</dt><dd>exponential backoff up to 60s; resets whenever a connection makes progress; gives up after 30 attempts that get nowhere</dd>'+
     '</dl>';
   }
 

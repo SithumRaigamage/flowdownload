@@ -25,6 +25,9 @@ from app.engine.storage import Storage  # noqa: E402
 
 DATA = os.urandom(400_000)
 CHUNK = 32 * 1024
+# (path, headers) of every request the fixture server received, for tests
+# that check what was actually sent over the wire.
+REQUESTS: list[tuple[str, dict]] = []
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -39,6 +42,7 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        REQUESTS.append((self.path, dict(self.headers)))
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
         if "status" in q:
             self.send_response(int(q["status"]))

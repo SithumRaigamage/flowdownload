@@ -87,5 +87,22 @@ def test_context_menu_download_reaches_the_database(home):
     assert task.filename == "b.zip"
 
 
+def test_referrer_flows_from_chrome_to_the_database(home):
+    out = run_extension(
+        {"download": {"id": 1, "url": "https://cdn.example.com/a.mp4", "referrer": "https://site.test/watch/1"}},
+        {"menu": {"linkUrl": "https://cdn.example.com/b.mp4", "pageUrl": "https://site.test/list"}},
+    )
+    for sent in out["native"]:
+        assert call_host(home, sent["msg"])["ok"]
+    rows = {t.filename: t.referrer for t in Storage(str(home / ".flowdownload" / "downloads.db")).load_all()}
+    assert rows == {"a.mp4": "https://site.test/watch/1", "b.mp4": "https://site.test/list"}
+
+
+def test_host_drops_non_http_referrer(home):
+    assert call_host(home, {"url": "https://cdn.example.com/c.mp4", "referrer": "chrome://newtab/"})["ok"]
+    (task,) = Storage(str(home / ".flowdownload" / "downloads.db")).load_all()
+    assert task.referrer == ""
+
+
 def test_host_rejects_unsafe_urls(home):
     assert call_host(home, {"url": "http://169.254.169.254/latest/meta-data"})["ok"] is False

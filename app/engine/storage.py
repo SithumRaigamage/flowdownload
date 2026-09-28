@@ -67,7 +67,8 @@ class Storage:
         for column, ddl_type in (("etag", "TEXT DEFAULT ''"), ("last_modified", "TEXT DEFAULT ''"),
                                   ("cookie_header", "TEXT DEFAULT ''"),
                                   ("digest_sha256", "TEXT DEFAULT ''"),
-                                  ("digest_verified", "INTEGER DEFAULT 0")):
+                                  ("digest_verified", "INTEGER DEFAULT 0"),
+                                  ("referrer", "TEXT DEFAULT ''")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
         # Two processes (this app and the Chrome native host, launched fresh
@@ -96,8 +97,8 @@ class Storage:
                 INSERT INTO downloads
                     (id, url, dest_path, filename, total_bytes, downloaded_bytes,
                      status, error_message, etag, last_modified, cookie_header,
-                     digest_sha256, digest_verified, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     digest_sha256, digest_verified, referrer, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -111,6 +112,7 @@ class Storage:
                     cookie_header=excluded.cookie_header,
                     digest_sha256=excluded.digest_sha256,
                     digest_verified=excluded.digest_verified,
+                    referrer=excluded.referrer,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -127,7 +129,7 @@ class Storage:
             rows = self._conn.execute(
                 "SELECT id, url, dest_path, filename, total_bytes, downloaded_bytes, "
                 "status, error_message, etag, last_modified, cookie_header, "
-                "digest_sha256, digest_verified, created_at, updated_at "
+                "digest_sha256, digest_verified, referrer, created_at, updated_at "
                 "FROM downloads ORDER BY created_at DESC"
             ).fetchall()
         return [DownloadTask.from_row(row) for row in rows]

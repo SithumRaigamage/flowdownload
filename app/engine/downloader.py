@@ -51,7 +51,7 @@ class DownloadWorker(QThread):
     size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
-                 cookie_header: str, session: requests.Session, parent=None):
+                 cookie_header: str, session: requests.Session, referrer: str = "", parent=None):
         super().__init__(parent)
         # Deliberately plain values/instance attributes, not a reference to the
         # manager's shared DownloadTask: this thread mutates them freely as it
@@ -69,6 +69,7 @@ class DownloadWorker(QThread):
         self.etag = etag
         self.last_modified = last_modified
         self.cookie_header = cookie_header
+        self.referrer = referrer
         self._session = session
         self._pause_event = threading.Event()
         self._cancel_event = threading.Event()
@@ -180,6 +181,8 @@ class DownloadWorker(QThread):
         headers = {}
         if self.cookie_header:
             headers["Cookie"] = self.cookie_header
+        if self.referrer:
+            headers["Referer"] = self.referrer
         if can_resume:
             headers["Range"] = f"bytes={existing_bytes}-"
             # If-Range makes the resume conditional: the server only honors the
