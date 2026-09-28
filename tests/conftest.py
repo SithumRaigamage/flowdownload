@@ -12,11 +12,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from PySide6.QtCore import QCoreApplication
 
-from app.engine.manager import DownloadManager
-from app.engine.settings import Settings
-from app.engine.storage import Storage
+# QtWebEngine (used by tests/ui) must be imported before the QApplication
+# exists, and renders fine offscreen -- so no window ever appears.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6 import QtWebEngineWidgets  # noqa: E402,F401
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from app.engine.manager import DownloadManager  # noqa: E402
+from app.engine.settings import Settings  # noqa: E402
+from app.engine.storage import Storage  # noqa: E402
 
 DATA = os.urandom(400_000)
 CHUNK = 32 * 1024
@@ -65,7 +70,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture(scope="session")
 def qapp():
-    return QCoreApplication.instance() or QCoreApplication([])
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture(scope="session")

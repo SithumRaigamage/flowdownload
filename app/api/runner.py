@@ -33,10 +33,13 @@ class ApiServer:
     signal/slot bridge needs main-thread affinity to work.
     """
 
-    def __init__(self, manager: DownloadManager, settings_path: str):
+    def __init__(self, manager: DownloadManager, settings_path: str,
+                 port: int = API_PORT, app_data_dir: str = APP_DATA_DIR):
+        # port/app_data_dir are overridable so tests can run a second server
+        # beside a running app without fighting it for 8756 or ~/.flowdownload.
         self.manager = manager
         self.token = secrets.token_urlsafe(32)
-        self.port = API_PORT
+        self.port = port
         self.executor = MainThreadExecutor()
         # Optional callback registered by the UI (WebMainWindow) to open a
         # completed file in the native OS media player. Lives on the Qt main
@@ -47,7 +50,7 @@ class ApiServer:
         self._loop = asyncio.new_event_loop()
         self.broadcaster = EventBroadcaster(self._loop)
         app = create_app(
-            manager, self.executor, self.broadcaster, settings_path, self.token, APP_DATA_DIR,
+            manager, self.executor, self.broadcaster, settings_path, self.token, app_data_dir,
             get_native_player_opener=lambda: self._native_player_opener,
         )
         config = uvicorn.Config(app, host="127.0.0.1", port=self.port, loop="none", log_level="warning")
