@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.engine.manager import MAX_PER_DOMAIN
 from app.engine.models import DownloadTask
 from app.engine.settings import Settings
 
@@ -96,6 +97,9 @@ class SettingsOut(BaseModel):
     minimize_to_tray: bool
     auto_folder_by_type: bool
     duplicate_policy: Literal["rename", "skip", "overwrite"]
+    # Read-only engine constant, sent so the UI can explain why a download
+    # is still queued without hard-coding the limit a second time.
+    max_per_domain: int = MAX_PER_DOMAIN
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SettingsOut":

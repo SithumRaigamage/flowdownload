@@ -73,6 +73,7 @@ class DownloadManager(QObject):
         # PAUSED signal is ignored for them) and dispatched once it exits.
         self._resume_pending: set[str] = set()
         self._last_progress_save: dict[str, float] = {}
+        self._shutting_down = False
         # Per-task event log for the UI's detail view -- in-memory only
         # (not persisted), since it's a debugging aid, not state the app
         # needs to survive a restart.
@@ -104,15 +105,15 @@ class DownloadManager(QObject):
 
     def _load_existing(self) -> None:
         for task in self.storage.load_all():
-            # Anything mid-flight when the app last closed is not actually
-            # running anymore; reflect that, and re-sync progress from the
-            # .part file on disk since that's the real source of truth.
-            # Tasks that were only QUEUED (never got a worker slot) stay
-            # queued -- they'll be picked up by _dispatch_queue() below,
-            # same as if they'd just been added.
+            # Anything mid-flight when the app last closed was interrupted by
+            # the quit, not paused by the user (shutdown() keeps its pauses
+            # out of the DB), so queue it to carry on automatically. Progress
+            # is re-synced from the .part file, the real source of truth.
+            # Tasks that were only QUEUED stay queued; both get picked up by
+            # _dispatch_queue() below, same as if they'd just been added.
             if task.status in ACTIVE_STATUSES:
-                task.status = DownloadStatus.PAUSED
-                self._log(task.id, "info", "Interrupted by app restart")
+                task.status = DownloadStatus.QUEUED
+                self._log(task.id, "info", "Interrupted by app restart — resuming")
             if os.path.exists(task.part_path):
                 task.downloaded_bytes = os.path.getsize(task.part_path)
             task.updated_at = time.time()
@@ -338,6 +339,10 @@ class DownloadManager(QObject):
         while running -- which would trigger QThread's "destroyed while still
         running" abort. The process is exiting anyway, so leaking them is fine.
         """
+        # Their PAUSED signals are ignored from here on (see
+        # _do_status_changed) so the DB keeps them as downloading, which
+        # _load_existing resumes on the next launch -- unlike a user pause.
+        self._shutting_down = True
         # Pause all workers so they exit at the next chunk boundary.
         for worker in list(self._workers.values()):
             worker.pause()
@@ -363,6 +368,8 @@ class DownloadManager(QObject):
                    if t.status in ACTIVE_STATUSES and _domain_key(t.url) == domain)
 
     def _dispatch_queue(self) -> None:
+        if self._shutting_down:
+            return
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
@@ -496,6 +503,8 @@ class DownloadManager(QObject):
         if task is None:
             return
         status = DownloadStatus(status_value)
+        if status == DownloadStatus.PAUSED and self._shutting_down:
+            return  # quit, not a user pause -- keep it resumable on relaunch
         if status == DownloadStatus.PAUSED and task_id in self._resume_pending:
             # Resumed while this worker was still pausing: stay queued.
             status = DownloadStatus.QUEUED

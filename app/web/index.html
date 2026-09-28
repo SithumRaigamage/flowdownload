@@ -1453,6 +1453,38 @@ function visible(){
   return out;
 }
 
+// Same grouping as _domain_key in app/engine/manager.py: last two hostname
+// labels, or the whole host for an IP literal.
+function domainKey(url){
+  let h; try{ h=new URL(url).hostname.toLowerCase(); }catch(_){ return url; }
+  if(/^[\d.]+$/.test(h) || h.startsWith("[")) return h;
+  return h.split(".").slice(-2).join(".");
+}
+
+// Why a queued download hasn't started. Computed on every render rather
+// than sent by the server: it depends on *other* downloads, which change
+// without this row receiving an update of its own.
+function waitReason(d){
+  if(d.state!=="queued") return "";
+  const active=downloads.filter(x=>x.state==="downloading"||x.state==="retrying");
+  if(active.length>=settingsCache.max_concurrent_downloads) return "Waiting for a free slot";
+  const lim=settingsCache.max_per_domain, key=domainKey(d.url);
+  if(lim && active.filter(x=>domainKey(x.url)===key).length>=lim)
+    return "Waiting — "+lim+" already downloading from "+key;
+  return "";
+}
+
+function rbotHTML(d){
+  if((d.state==="failed"||d.state==="retrying") && d.error)
+    return '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>';
+  const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
+  const reason = waitReason(d);
+  return '<span class="mono">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</span>'+
+    '<span class="sep">·</span><span>'+Math.round(pct(d)*100)+'%</span>'+
+    (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'')+
+    (reason?'<span class="sep">·</span><span>'+esc(reason)+'</span>':'');
+}
+
 function segbarHTML(d){
   const p = pct(d);
   const w = isFinite(p) ? p*100 : 0;
@@ -1493,7 +1525,6 @@ function renderList(){
   list.innerHTML=items.map(d=>{
     const sel=ui.selected.has(d.id);
     const showBar = d.state!=="completed";
-    const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
     return '<div class="row" data-id="'+d.id+'" data-selected="'+sel+'" data-active="'+(ui.activeId===d.id)+'" tabindex="0">'+
       '<span class="cb" role="checkbox" aria-checked="'+sel+'" data-check="'+d.id+'" tabindex="0" aria-label="Select '+esc(d.name)+'"><i class="checkbox" aria-checked="'+sel+'"></i></span>'+
       '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
@@ -1502,14 +1533,7 @@ function renderList(){
           '<span class="badge badge-'+d.state+'">'+d.state[0].toUpperCase()+d.state.slice(1)+'</span>'+
           '<span class="fhost mono">'+esc(d.host)+'</span></div>'+
         (showBar?segbarHTML(d):'')+
-        '<div class="rbot">'+
-          ((d.state==="failed"||d.state==="retrying") && d.error
-            ? '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>'
-            : '<span class="mono">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</span>'+
-              '<span class="sep">·</span><span>'+Math.round(pct(d)*100)+'%</span>'+
-              (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'')
-          )+
-        '</div>'+
+        '<div class="rbot">'+rbotHTML(d)+'</div>'+
       '</div>'+
       '<div style="display:flex;align-items:center;gap:8px">'+
         '<div class="rmeta">'+rowMeta(d)+'</div>'+
@@ -1689,7 +1713,28 @@ async function act(id,what){
       toast("info","Removed from list","The file on disk was kept");
       render();
     }
+    else if(what==="deletefile") confirmDeleteFile(d);
   }catch(err){ toast("err","Action failed",err.message); }
+}
+
+// Remove from the list AND delete the file from disk. Permanent (not the
+// Trash), so it always asks first -- plain "Remove" stays one click.
+function confirmDeleteFile(d){
+  const dlg=overlay('<div class="dialog" style="max-width:420px" role="alertdialog" aria-modal="true" aria-labelledby="delTitle">'+
+    '<div class="dialog-head"><h2 id="delTitle">Delete file?</h2>'+
+    '<p><b>'+esc(d.name)+'</b> will be permanently deleted from disk. This can\'t be undone.</p></div>'+
+    '<div class="dialog-foot"><button class="btn btn-ghost" data-close>Cancel</button>'+
+    '<button class="btn btn-primary" id="delGo" style="background:var(--destructive)">Delete file</button></div></div>');
+  const go=dlg.querySelector("#delGo");  // overlay() focuses Cancel -- the safe default
+  go.onclick=async()=>{
+    try{
+      await del("/api/downloads/"+d.id+"?delete_file=true");
+      downloads=downloads.filter(x=>x.id!==d.id); ui.selected.delete(d.id);
+      thumbCache.delete(d.id);
+      if(ui.activeId===d.id) ui.activeId=null;
+      closeOverlay(); toast("info","File deleted",d.name); render();
+    }catch(err){ toast("err","Couldn't delete file",err.message); }
+  };
 }
 
 function toggleRowSelect(id){ ui.selected.has(id)?ui.selected.delete(id):ui.selected.add(id); render(); }
@@ -1738,7 +1783,8 @@ function openMenu(anchor,id){
   items.push(["copy","Copy source link"]);
   if(isMediaDownload(d) && d.state==="completed") items.push(["play","Preview / Play"]);
   m.innerHTML=items.map(i=>'<button data-m="'+i[0]+'">'+i[1]+'</button>').join("")+
-    '<div class="msep"></div><button data-m="remove" data-danger="true">Remove from list</button>';
+    '<div class="msep"></div><button data-m="remove" data-danger="true">Remove from list</button>'+
+    (d.state==="completed"?'<button data-m="deletefile" data-danger="true">Delete file…</button>':'');
   document.body.appendChild(m);
   m.style.left=Math.min(r.left, innerWidth-200)+"px";
   m.style.top=Math.min(r.bottom+4, innerHeight-m.offsetHeight-10)+"px";
@@ -1761,7 +1807,7 @@ document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
 document.getElementById("startAllBtn").addEventListener("click",async()=>{
   try{
     await post("/api/downloads/resume-all");
-    toast("ok","Starting all","Paused and queued downloads will begin shortly");
+    toast("ok","Starting all","Paused, queued and failed downloads will begin shortly");
   }catch(err){ toast("err","Couldn't start all",err.message); }
 });
 document.getElementById("removeAllBtn").addEventListener("click",async()=>{
@@ -2140,19 +2186,19 @@ function connectWS(){
         const orderChanging = (ui.sort==="speed" && prev.speedBps!==n.speedBps)
           || (ui.sort==="size" && prev.size!==n.size)
           || (ui.sort==="progress" && pct(prev)!==pct(n));
-        if(orderChanging){ render(); return; }
+        // A state change needs a full render: the row's badge and actions,
+        // the filter counts, list membership under a status filter, and the
+        // wait reason on every queued row (a slot was freed or taken) all
+        // depend on it. Rare next to progress ticks, so this stays cheap.
+        if(orderChanging || prev.state!==n.state){ render(); return; }
         const el=document.querySelector('.row[data-id="'+n.id+'"]');
         if(el){
           const seg=el.querySelector(".segbar");
           if(seg){ seg.dataset.state=n.state; seg.setAttribute("aria-valuenow",String(Math.round(pct(n)*100))); const fill=seg.querySelector("i"); if(fill) fill.style.width=(pct(n)*100)+"%"; }
           const meta=el.querySelector(".rmeta"); if(meta) meta.innerHTML=rowMeta(n);
-          const bot=el.querySelector(".rbot"); if(bot){
-            const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(n.state) && n.size>0 && !n.acceptRanges;
-            bot.innerHTML='<span class="mono">'+fmtBytes(n.received)+' of '+fmtBytes(n.size)+'</span>'+
-              '<span class="sep">·</span><span>'+Math.round(pct(n)*100)+'%</span>'+
-              (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'');
-          }
+          const bot=el.querySelector(".rbot"); if(bot) bot.innerHTML=rbotHTML(n);
         }
+
         renderStats(); renderSystem(); renderViewNav();
         if(ui.activeId===n.id) renderSheet();
       } else {
