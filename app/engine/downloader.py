@@ -77,6 +77,10 @@ class DownloadWorker(QThread):
         # Parsed from the server's Digest header on the first response, if present.
         # Stored as hex so it can be compared directly against our computed hash.
         self._server_digest_sha256: str | None = None
+        # Set when we've emitted RETRYING; cleared (and DOWNLOADING emitted)
+        # once a reconnect is accepted, so the status doesn't stay stuck on
+        # RETRYING for the rest of a download that recovered.
+        self._retrying = False
 
     def pause(self) -> None:
         self._pause_event.set()
@@ -124,6 +128,7 @@ class DownloadWorker(QThread):
                     self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
                     return
                 self._smoothed_speed = 0.0
+                self._retrying = True
                 self.status_changed.emit(
                     self.task_id, DownloadStatus.RETRYING.value,
                     f"{exc.__class__.__name__} — retrying in {delay:.0f}s",
@@ -231,6 +236,9 @@ class DownloadWorker(QThread):
                 self._server_digest_sha256 = _parse_sha256_digest(response.headers.get("Digest"))
 
             self.metadata_resolved.emit(self.task_id, self._total_bytes, self.etag, self.last_modified)
+            if self._retrying:
+                self._retrying = False
+                self.status_changed.emit(self.task_id, DownloadStatus.DOWNLOADING.value, "")
             return self._stream_to_file(response, mode, existing_bytes)
         finally:
             response.close()
