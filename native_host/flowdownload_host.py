@@ -36,7 +36,13 @@ SETTINGS_PATH = os.path.join(APP_DATA_DIR, "settings.json")
 PID_FILE = os.path.join(APP_DATA_DIR, "app.pid")
 VENV_PYTHON = os.path.join(PROJECT_ROOT, "venv", "bin", "python3")
 RUN_SCRIPT = os.path.join(PROJECT_ROOT, "run.py")
-APP_BUNDLE = "/Applications/FlowDownload.app"
+# Where build_app.sh can put the app: --install-system, --install, or the
+# plain build output. First existing one wins; none -> run from source.
+APP_BUNDLE_CANDIDATES = (
+    "/Applications/FlowDownload.app",
+    os.path.join(os.path.expanduser("~"), "Applications", "FlowDownload.app"),
+    os.path.join(PROJECT_ROOT, "dist", "FlowDownload.app"),
+)
 EXTENSION_STATE_FILE = os.path.join(APP_DATA_DIR, "chrome_extension_state.json")
 
 
@@ -56,14 +62,18 @@ def send_message(payload: dict) -> None:
     sys.stdout.buffer.flush()
 
 
-def launch_app_if_needed() -> None:
-    if InstanceLock.is_running(PID_FILE):
-        return
-    if os.path.isdir(APP_BUNDLE):
+def _find_app_bundle() -> str | None:
+    return next((p for p in APP_BUNDLE_CANDIDATES if os.path.isdir(p)), None)
+
+
+def _open_app() -> None:
+    bundle = _find_app_bundle()
+    if bundle:
         # `open -a` launches through the app bundle, so the Dock shows the
         # real FlowDownload icon -- launching venv/bin/python3 directly (the
         # fallback below) makes macOS show a bare Python interpreter instead.
-        subprocess.Popen(["open", "-a", APP_BUNDLE], start_new_session=True)
+        # If the app is already running it just activates it.
+        subprocess.Popen(["open", "-a", bundle], start_new_session=True)
     else:
         subprocess.Popen(
             [VENV_PYTHON, RUN_SCRIPT],
@@ -71,22 +81,18 @@ def launch_app_if_needed() -> None:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+
+def launch_app_if_needed() -> None:
+    if InstanceLock.is_running(PID_FILE):
+        return
+    _open_app()
 
 
 def _bring_to_front() -> None:
-    # `open -a` on macOS activates the app if it's already running
-    # (raising its window to the foreground) or launches it if not. This
-    # is the "show_window" path -- separate from launch_app_if_needed
-    # because that one refuses to relaunch when the app is already up.
-    if os.path.isdir(APP_BUNDLE):
-        subprocess.Popen(["open", "-a", APP_BUNDLE], start_new_session=True)
-    else:
-        subprocess.Popen(
-            [VENV_PYTHON, RUN_SCRIPT],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    # The "show_window" path: unlike launch_app_if_needed, this runs even
+    # when the app is already up, so `open -a` raises its window.
+    _open_app()
 
 
 def _write_extension_state(profile_id: str, profile_name: str) -> None:
