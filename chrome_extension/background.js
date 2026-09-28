@@ -94,7 +94,11 @@ function sendToFlowDownload(url, referrer) {
           return;
         }
         if (response && response.ok) {
-          if (response.duplicate) {
+          if (response.refreshed) {
+            // Matched an unfinished download (e.g. its link had expired):
+            // the app resumes that one's partial file with this new link.
+            notify("Resumed with a fresh link", response.filename || url);
+          } else if (response.duplicate) {
             // The URL matches a completed task — surface that clearly so the
             // user knows their copy is already on disk rather than wondering
             // whether the queue swallowed it silently.

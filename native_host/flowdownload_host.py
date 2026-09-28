@@ -25,8 +25,8 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from app.engine.instance_lock import InstanceLock  # noqa: E402
 from app.engine.models import DownloadStatus, DownloadTask  # noqa: E402
-from app.engine.paths import dedupe_path  # noqa: E402
-from app.engine.probe import guess_filename_from_url, validate_download_url  # noqa: E402
+from app.engine.paths import dedupe_path, domain_key, strip_dedupe_suffix  # noqa: E402
+from app.engine.probe import guess_filename_from_url, probe_identity, validate_download_url  # noqa: E402
 from app.engine.settings import Settings  # noqa: E402
 from app.engine.storage import Storage  # noqa: E402
 
@@ -133,6 +133,41 @@ def _safe_referrer(value) -> str:
     return ""
 
 
+def _find_refresh_target(storage: Storage, url: str, filename: str,
+                         cookie: str, referrer: str) -> DownloadTask | None:
+    """The one unfinished download this new link is most likely a fresh copy of.
+
+    Candidates: failed or paused downloads on the same site, with partial
+    data on disk, under a different URL. The first unique match wins:
+      1. same filename (ignoring a " (n)" suffix dedupe_path added), else
+      2. same ETag, else same size, per a quick probe of the new link --
+         re-signed CDN links often change the path, and so the filename
+         guessed from it, while serving the identical file.
+    Anything ambiguous returns None, and the link is queued as a new download.
+    """
+    site = domain_key(url)
+    candidates = [
+        t for t in storage.load_all()
+        if t.status in (DownloadStatus.FAILED, DownloadStatus.PAUSED)
+        and t.url != url and domain_key(t.url) == site and os.path.exists(t.part_path)
+    ]
+    if not candidates:
+        return None  # the common case: no network probe at all
+    by_name = [t for t in candidates if strip_dedupe_suffix(t.filename) == filename]
+    if len(by_name) == 1:
+        return by_name[0]
+    headers = {k: v for k, v in (("Cookie", cookie), ("Referer", referrer)) if v}
+    identity = probe_identity(url, headers)
+    if identity is None:
+        return None
+    etag, size = identity
+    for matches in ([t for t in candidates if etag and t.etag == etag],
+                    [t for t in candidates if size and t.total_bytes == size]):
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
 def handle_message(message: dict) -> dict:
     action = message.get("action")
     profile_id = message.get("profile_id") or "unknown"
@@ -185,6 +220,17 @@ def handle_message(message: dict) -> dict:
             }
             break
 
+    cookie = message.get("cookie") or ""
+    referrer = _safe_referrer(message.get("referrer"))
+    target = _find_refresh_target(storage, url, filename, cookie, referrer)
+    if target is not None:
+        # A fresh link for a download that stalled (typically an expired
+        # signed URL): hand it to the app to resume the existing partial
+        # file instead of starting a duplicate from zero.
+        storage.add_refresh(target.id, url, cookie, referrer)
+        launch_app_if_needed()
+        return {"ok": True, "filename": target.filename, "refreshed": True}
+
     policy = getattr(settings, "duplicate_policy", "rename")
     if existing_match is not None and policy == "skip":
         launch_app_if_needed()
@@ -220,8 +266,7 @@ def handle_message(message: dict) -> dict:
         dest_path = dedupe_path(dest_path, reserved)
     task = DownloadTask(
         url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
-        status=DownloadStatus.QUEUED, cookie_header=message.get("cookie") or "",
-        referrer=_safe_referrer(message.get("referrer")),
+        status=DownloadStatus.QUEUED, cookie_header=cookie, referrer=referrer,
     )
     # This process's reserved-set snapshot and the running app's aren't
     # coordinated -- storage's UNIQUE index on dest_path turns a same-instant

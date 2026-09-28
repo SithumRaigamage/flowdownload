@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import ipaddress
 import os
 import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
-from app.engine.paths import dedupe_path
+from app.engine.paths import dedupe_path, domain_key
 from app.engine.probe import validate_download_url
 from app.engine.settings import Settings
 from app.engine.storage import Storage
@@ -101,7 +99,46 @@ class DownloadManager(QObject):
             if task.id not in self.tasks:
                 self.tasks[task.id] = task
                 self.task_added.emit(task.id)
+        self._apply_pending_refreshes()
         self._dispatch_queue()
+
+    def _apply_pending_refreshes(self) -> None:
+        """Apply fresh links the Chrome native host matched to our downloads."""
+        for task_id, url, cookie, referrer in self.storage.pop_refreshes():
+            if task_id not in self.tasks:
+                continue  # removed since the host matched it
+            try:
+                self.refresh_url(task_id, url, cookie=cookie, referrer=referrer, source="Chrome")
+            except ValueError as exc:
+                self._log(task_id, "warn", f"Ignored a fresh link from Chrome: {exc}")
+
+    def refresh_url(self, task_id: str, url: str, cookie: str | None = None,
+                    referrer: str | None = None, source: str = "") -> None:
+        """Point an unfinished download at a new URL (e.g. a re-signed CDN link)
+        and resume it.
+
+        The .part file and the ETag/Last-Modified validators are kept, so the
+        next request is a conditional (If-Range) resume: the server continues
+        from our partial data if it's the same file, or sends the whole thing
+        again if it isn't -- the worker already restarts from 0 in that case.
+        Raises ValueError for an unsafe URL or a completed download.
+        """
+        validate_download_url(url)
+        task = self.tasks[task_id]
+        if task.status == DownloadStatus.COMPLETED:
+            raise ValueError("This download has already completed")
+        task.url = url
+        if cookie is not None:
+            task.cookie_header = cookie
+        if referrer is not None:
+            task.referrer = referrer
+        task.error_message = ""
+        task.updated_at = time.time()
+        self.storage.save(task)
+        self._log(task_id, "info", "Link refreshed" + (f" from {source}" if source else ""))
+        if task.status in ACTIVE_STATUSES:
+            self.pause(task_id)  # the old worker is still on the old URL
+        self.start(task_id)
 
     def _load_existing(self) -> None:
         for task in self.storage.load_all():
@@ -119,6 +156,7 @@ class DownloadManager(QObject):
             task.updated_at = time.time()
             self.storage.save(task)
             self.tasks[task.id] = task
+        self._apply_pending_refreshes()
         self._dispatch_queue()
 
     def _log(self, task_id: str, level: str, message: str) -> None:
@@ -214,7 +252,7 @@ class DownloadManager(QObject):
             self.task_updated.emit(task_id)
             return
         if (self._active_count() >= self.settings.max_concurrent_downloads
-                or self._active_count_for_domain(_domain_key(task.url)) >= MAX_PER_DOMAIN):
+                or self._active_count_for_domain(domain_key(task.url)) >= MAX_PER_DOMAIN):
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -343,6 +381,7 @@ class DownloadManager(QObject):
         # _do_status_changed) so the DB keeps them as downloading, which
         # _load_existing resumes on the next launch -- unlike a user pause.
         self._shutting_down = True
+        self._external_poll_timer.stop()
         # Pause all workers so they exit at the next chunk boundary.
         for worker in list(self._workers.values()):
             worker.pause()
@@ -365,7 +404,7 @@ class DownloadManager(QObject):
 
     def _active_count_for_domain(self, domain: str) -> int:
         return sum(1 for t in self.tasks.values()
-                   if t.status in ACTIVE_STATUSES and _domain_key(t.url) == domain)
+                   if t.status in ACTIVE_STATUSES and domain_key(t.url) == domain)
 
     def _dispatch_queue(self) -> None:
         if self._shutting_down:
@@ -376,7 +415,7 @@ class DownloadManager(QObject):
         per_domain: dict[str, int] = {}
         for t in self.tasks.values():
             if t.status in ACTIVE_STATUSES:
-                key = _domain_key(t.url)
+                key = domain_key(t.url)
                 per_domain[key] = per_domain.get(key, 0) + 1
         # Only auto-start QUEUED tasks. PAUSED tasks must wait for an explicit
         # Resume click — otherwise the dispatcher re-spawns them immediately
@@ -393,7 +432,7 @@ class DownloadManager(QObject):
                 continue  # previous worker still unwinding; never run two on one .part
             # A domain at its cap is skipped, not a stopping point -- a queued
             # task from another site can still take the free slot.
-            key = _domain_key(task.url)
+            key = domain_key(task.url)
             if per_domain.get(key, 0) >= MAX_PER_DOMAIN:
                 continue
             self._spawn(task.id)
@@ -621,21 +660,6 @@ def apply_auto_folder_for_path(filename: str, base_dir: str) -> str:
     else:
         sub = "Other"
     return os.path.join(base_dir, sub, filename)
-
-
-def _domain_key(url: str) -> str:
-    """Group key for the per-domain limit: the last two hostname labels.
-
-    c7.trafficdeposit.com and c10.trafficdeposit.com both map to
-    trafficdeposit.com. Without a public-suffix list, foo.co.uk and
-    bar.co.uk share a key too -- that only makes the limit stricter.
-    """
-    host = (urlparse(url).hostname or "").lower()
-    try:
-        ipaddress.ip_address(host)
-        return host
-    except ValueError:
-        return ".".join(host.split(".")[-2:])
 
 
 _AUTO_FOLDER_SUBDIRS = {"Video", "Audio", "Documents", "Archives", "Other"}

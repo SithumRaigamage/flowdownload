@@ -23,8 +23,17 @@ def attempts(monkeypatch):
     return seen
 
 
+# Workers are kept alive for the whole session. A parentless QThread is owned
+# by its Python wrapper, so letting it be garbage-collected frees the C++
+# object while its last queued signals may still be in flight -- a segfault
+# the next time the event loop runs. (The app avoids this by only dropping a
+# worker from its own `finished` handler; see DownloadManager._on_worker_finished.)
+_WORKERS: list[DownloadWorker] = []
+
+
 def run_worker(url, tmp_path, wait, referrer=""):
     worker = DownloadWorker("t", url, str(tmp_path / "out.bin"), "", "", "", requests.Session(), referrer=referrer)
+    _WORKERS.append(worker)
     statuses: list[str] = []
     worker.status_changed.connect(lambda _tid, status, _msg: statuses.append(status))
     worker.start()

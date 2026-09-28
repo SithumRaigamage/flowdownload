@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 from app.engine.models import DownloadTask
@@ -79,6 +80,15 @@ class Storage:
         # turns that race into an IntegrityError the inserting side catches
         # and retries against (see DownloadManager.add_download and the
         # native host), instead of silently letting two tasks share a path.
+        # Fresh links the Chrome native host matched to an existing unfinished
+        # download. The host is a separate process and can't reach the running
+        # app's in-memory tasks, so it leaves the new URL here and the app
+        # applies it (DownloadManager._apply_pending_refreshes).
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_refresh ("
+            "task_id TEXT NOT NULL, url TEXT NOT NULL, cookie TEXT DEFAULT '', "
+            "referrer TEXT DEFAULT '', created_at REAL)"
+        )
         try:
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_downloads_dest_path ON downloads(dest_path)"
@@ -118,6 +128,25 @@ class Storage:
                 task.to_row(),
             )
             self._conn.commit()
+
+    def add_refresh(self, task_id: str, url: str, cookie: str, referrer: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO pending_refresh (task_id, url, cookie, referrer, created_at) VALUES (?, ?, ?, ?, ?)",
+                (task_id, url, cookie, referrer, time.time()),
+            )
+            self._conn.commit()
+
+    def pop_refreshes(self) -> list[tuple[str, str, str, str]]:
+        """Return and delete every pending (task_id, url, cookie, referrer), oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT rowid, task_id, url, cookie, referrer FROM pending_refresh ORDER BY rowid"
+            ).fetchall()
+            if rows:
+                self._conn.execute("DELETE FROM pending_refresh WHERE rowid <= ?", (rows[-1][0],))
+                self._conn.commit()
+        return [row[1:] for row in rows]
 
     def delete(self, task_id: str) -> None:
         with self._lock:

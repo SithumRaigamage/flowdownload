@@ -57,6 +57,30 @@ def parse_content_disposition_filename(header: str) -> str | None:
     return unquote(match.group(1).strip()) if match else None
 
 
+def probe_identity(url: str, headers: dict | None = None) -> tuple[str, int] | None:
+    """Best-effort (etag, total_size) for a URL, used to recognise the same
+    file behind a different (e.g. re-signed) link. None on any failure."""
+    try:
+        validate_download_url(url)
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=PROBE_TIMEOUT)
+        etag = response.headers.get("ETag", "")
+        size = int(response.headers.get("Content-Length") or 0)
+        if not response.ok or not (etag or size):
+            # Some servers don't implement HEAD; a one-byte ranged GET gets
+            # the same validators plus the full size in Content-Range.
+            response = requests.get(url, headers={**(headers or {}), "Range": "bytes=0-0"},
+                                    stream=True, timeout=PROBE_TIMEOUT)
+            response.close()
+            if not response.ok:
+                return None
+            etag = response.headers.get("ETag", "")
+            total = response.headers.get("Content-Range", "").rpartition("/")[2]
+            size = int(total) if total.isdigit() else 0
+        return (etag, size) if (etag or size) else None
+    except (requests.exceptions.RequestException, ValueError):
+        return None
+
+
 def probe_remote_filename(url: str) -> str | None:
     """Best-effort lookup of the filename the server intends via Content-Disposition.
 

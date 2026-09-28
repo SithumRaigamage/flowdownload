@@ -5,7 +5,8 @@ import os
 import time
 
 from app.engine import manager as manager_mod
-from app.engine.manager import MAX_PER_DOMAIN, _domain_key
+from app.engine.manager import MAX_PER_DOMAIN
+from app.engine.paths import domain_key, strip_dedupe_suffix
 from app.engine.models import DownloadStatus as S
 from app.engine.models import DownloadTask
 from tests.conftest import DATA
@@ -14,10 +15,17 @@ SLOW = "delay=0.05"  # ~0.6 s per file: slow enough to pause/cancel mid-download
 
 
 def test_domain_key_groups_subdomains():
-    assert _domain_key("https://c7.trafficdeposit.com/x") == "trafficdeposit.com"
-    assert _domain_key("https://C10.TrafficDeposit.com/y") == "trafficdeposit.com"
-    assert _domain_key("http://192.168.1.5:8080/a") == "192.168.1.5"
-    assert _domain_key("http://localhost/a") == "localhost"
+    assert domain_key("https://c7.trafficdeposit.com/x") == "trafficdeposit.com"
+    assert domain_key("https://C10.TrafficDeposit.com/y") == "trafficdeposit.com"
+    assert domain_key("http://192.168.1.5:8080/a") == "192.168.1.5"
+    assert domain_key("http://localhost/a") == "localhost"
+
+
+def test_strip_dedupe_suffix():
+    assert strip_dedupe_suffix("movie (2).mp4") == "movie.mp4"
+    assert strip_dedupe_suffix("archive (10)") == "archive"
+    assert strip_dedupe_suffix("movie.mp4") == "movie.mp4"
+    assert strip_dedupe_suffix("a (b).mp4") == "a (b).mp4"
 
 
 def test_dispatch_respects_per_domain_limit(make_manager):
@@ -37,7 +45,7 @@ def test_dispatch_respects_per_domain_limit(make_manager):
     mgr._dispatch_queue()
 
     def active(domain):
-        return sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING and _domain_key(t.url) == domain)
+        return sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING and domain_key(t.url) == domain)
 
     assert active("example.com") == MAX_PER_DOMAIN
     assert active("other.test") == 2

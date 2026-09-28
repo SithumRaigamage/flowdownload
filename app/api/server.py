@@ -17,7 +17,7 @@ from app.api.events import EventBroadcaster
 from app.api.main_thread import MainThreadExecutor
 from app.api.schemas import (
     ChromeStatus, DedupeCheckRequest, DedupeCheckResponse, DiskInfo, DownloadOut,
-    HistoryEntry, NewDownloadRequest, PickFolderResponse, ProbeResponse,
+    HistoryEntry, NewDownloadRequest, PickFolderResponse, ProbeResponse, RefreshUrlRequest,
     SettingsOut, SettingsPatch,
 )
 from app.engine.manager import DownloadManager, prune_empty_auto_folder_dir
@@ -439,6 +439,13 @@ def create_app(
     @app.post("/api/downloads/{task_id}/cancel", response_model=DownloadOut)
     def cancel_download(task_id: str, _=Depends(require_token)):
         return executor.call(lambda: _act_and_return(manager.cancel, task_id))
+
+    @app.post("/api/downloads/{task_id}/refresh-url", response_model=DownloadOut)
+    def refresh_download_url(task_id: str, body: RefreshUrlRequest, _=Depends(require_token)):
+        try:
+            return executor.call(lambda: _act_and_return(lambda tid: manager.refresh_url(tid, body.url), task_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     def _act_and_return(fn, task_id: str) -> DownloadOut:
         if task_id not in manager.tasks:

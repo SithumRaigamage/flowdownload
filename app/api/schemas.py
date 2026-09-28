@@ -124,6 +124,10 @@ class SettingsPatch(BaseModel):
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
 
 
+class RefreshUrlRequest(BaseModel):
+    url: str
+
+
 class DedupeCheckRequest(BaseModel):
     url: str
 

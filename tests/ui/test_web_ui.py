@@ -142,3 +142,27 @@ def test_delete_file_dialog(ui, server, wait):
     assert page.wait_js(f"!document.querySelector('.row[data-id=\"{task.id}\"]')")
     assert wait(lambda: not os.path.exists(task.dest_path))
     assert task.id not in mgr.tasks
+
+
+def test_refresh_link_dialog_resumes_download(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/old?delay=0.05", "movie.mp4")]
+    assert wait(lambda: task.downloaded_bytes > 100_000)
+    mgr.pause(task.id)
+    assert page.wait_js(page.row(task.id, ".badge") + "?.textContent === 'Paused'")
+    page.js(f"document.querySelector('.row[data-id=\"{task.id}\"]')"
+            ".dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, clientX: 20, clientY: 20}))")
+    page.js("document.querySelector('#ctxmenu [data-m=\"refresh\"]').click()")
+    assert page.wait_js("!!document.getElementById('refUrl')")
+    page.js(f"document.getElementById('refUrl').value = '{server}/new'")
+    page.js("document.getElementById('refGo').click()")
+    assert wait(lambda: task.url == f"{server}/new")
+    assert wait(lambda: task.status == S.COMPLETED)
+    assert page.wait_js("!document.getElementById('refUrl')")  # dialog closed
+
+
+def test_expired_link_hint_on_403(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/gone?status=403", "gone.bin")]
+    assert wait(lambda: task.status == S.FAILED)
+    assert page.wait_js(page.row(task.id, ".rbot") + "?.textContent.includes('Link may have expired')")

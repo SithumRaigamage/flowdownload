@@ -1474,9 +1474,13 @@ function waitReason(d){
   return "";
 }
 
+// 403/410 on a download that used to work usually means a signed link expired.
+const looksExpired = d => d.state==="failed" && /\b(403|410)\b/.test(d.error||"");
+
 function rbotHTML(d){
   if((d.state==="failed"||d.state==="retrying") && d.error)
-    return '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>';
+    return '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>'+
+      (looksExpired(d)?'<span class="sep">·</span><span>Link may have expired — right-click → Refresh link</span>':'');
   const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
   const reason = waitReason(d);
   return '<span class="mono">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</span>'+
@@ -1715,7 +1719,31 @@ async function act(id,what){
       render();
     }
     else if(what==="deletefile") confirmDeleteFile(d);
+    else if(what==="refresh") refreshLinkDialog(d);
   }catch(err){ toast("err","Action failed",err.message); }
+}
+
+// Give an unfinished download a new URL (e.g. a re-signed CDN link). The
+// partial file is kept: the server's ETag check decides resume vs restart.
+function refreshLinkDialog(d){
+  const dlg=overlay('<div class="dialog" style="max-width:480px" role="dialog" aria-modal="true" aria-labelledby="refTitle">'+
+    '<div class="dialog-head"><h2 id="refTitle">Refresh link</h2>'+
+    '<p>Paste a new link for <b>'+esc(d.name)+'</b>. Downloaded data is kept and resumed if the server still has the same file.</p></div>'+
+    '<div class="dialog-body"><div class="field"><label class="label" for="refUrl">New link</label>'+
+    '<input class="input mono" id="refUrl" placeholder="https://…"></div></div>'+
+    '<div class="dialog-foot"><button class="btn btn-ghost" data-close>Cancel</button>'+
+    '<button class="btn btn-primary" id="refGo">Refresh and resume</button></div></div>');
+  const input=dlg.querySelector("#refUrl"), go=dlg.querySelector("#refGo");
+  input.focus();
+  input.addEventListener("keydown",e=>{ if(e.key==="Enter") go.click(); });
+  go.onclick=async()=>{
+    const url=input.value.trim();
+    if(!url){ input.focus(); return; }
+    try{
+      upsert(await post("/api/downloads/"+d.id+"/refresh-url",{url}));
+      closeOverlay(); toast("ok","Link refreshed",d.name); render();
+    }catch(err){ toast("err","Couldn't refresh link",err.message); }
+  };
 }
 
 // Remove from the list AND delete the file from disk. Permanent (not the
@@ -1781,6 +1809,7 @@ function openMenu(anchor,id){
   if(d.state==="paused"||d.state==="queued") items.push(["resume","Resume"]);
   if(d.state==="failed"||d.state==="cancelled") items.push(["retry","Retry now"]);
   if(d.state==="completed") items.push(["reveal","Show in Finder"]);
+  if(d.state!=="completed") items.push(["refresh","Refresh link…"]);
   items.push(["copy","Copy source link"]);
   if(isMediaDownload(d) && d.state==="completed") items.push(["play","Preview / Play"]);
   m.innerHTML=items.map(i=>'<button data-m="'+i[0]+'">'+i[1]+'</button>').join("")+
