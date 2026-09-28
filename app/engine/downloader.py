@@ -81,6 +81,10 @@ class DownloadWorker(QThread):
         # once a reconnect is accepted, so the status doesn't stay stuck on
         # RETRYING for the rest of a download that recovered.
         self._retrying = False
+        # Bytes received on the current connection. A drop after real
+        # progress resets the retry counter, so a download that keeps
+        # moving is never failed just for reconnecting often.
+        self._attempt_bytes = 0
 
     def pause(self) -> None:
         self._pause_event.set()
@@ -122,6 +126,8 @@ class DownloadWorker(QThread):
                 if _is_permanent_http_error(exc):
                     self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
                     return
+                if self._attempt_bytes > 0:
+                    attempt = 0  # this connection made progress -- start the backoff over
                 attempt += 1
                 delay = compute_retry_delay(attempt)
                 if delay is None:
@@ -154,6 +160,7 @@ class DownloadWorker(QThread):
 
     def _attempt_download(self) -> int:
         """Returns the total bytes on disk once this attempt's streaming completes."""
+        self._attempt_bytes = 0
         existing_bytes = os.path.getsize(self.part_path) if os.path.exists(self.part_path) else 0
 
         # A resume is only safe when we can pair it with If-Range: that's
@@ -262,6 +269,7 @@ class DownloadWorker(QThread):
                 f.write(chunk)
                 downloaded += len(chunk)
                 downloaded_since_emit += len(chunk)
+                self._attempt_bytes += len(chunk)
 
                 now = time.monotonic()
                 elapsed = now - last_emit

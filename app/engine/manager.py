@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -18,6 +20,10 @@ from app.engine.storage import Storage
 
 ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 EXTERNAL_POLL_INTERVAL_MS = 2000
+# Cap on simultaneous downloads from one domain, independent of the global
+# max_concurrent_downloads. Many parallel streams to the same CDN make it
+# reset/stall connections, which shows up as a wall of RETRYING tasks.
+MAX_PER_DOMAIN = 6
 HISTORY_LIMIT = 50  # per task; in-memory only, so a restart clears it -- fine for a debugging log
 
 # Module-level reference to workers that didn't exit cleanly on shutdown.
@@ -180,8 +186,9 @@ class DownloadManager(QObject):
         existing = self._workers.get(task_id)
         if existing is not None and existing.isRunning():
             return
-        if self._active_count() >= self.settings.max_concurrent_downloads:
-            task = self.tasks[task_id]
+        task = self.tasks[task_id]
+        if (self._active_count() >= self.settings.max_concurrent_downloads
+                or self._active_count_for_domain(_domain_key(task.url)) >= MAX_PER_DOMAIN):
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -305,10 +312,19 @@ class DownloadManager(QObject):
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
 
+    def _active_count_for_domain(self, domain: str) -> int:
+        return sum(1 for t in self.tasks.values()
+                   if t.status in ACTIVE_STATUSES and _domain_key(t.url) == domain)
+
     def _dispatch_queue(self) -> None:
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
+        per_domain: dict[str, int] = {}
+        for t in self.tasks.values():
+            if t.status in ACTIVE_STATUSES:
+                key = _domain_key(t.url)
+                per_domain[key] = per_domain.get(key, 0) + 1
         # Only auto-start QUEUED tasks. PAUSED tasks must wait for an explicit
         # Resume click — otherwise the dispatcher re-spawns them immediately
         # after the user clicks Pause, which made Pause All look broken.
@@ -317,8 +333,17 @@ class DownloadManager(QObject):
              if t.status == DownloadStatus.QUEUED),
             key=lambda t: t.created_at,
         )
-        for task in candidates[:free_slots]:
+        for task in candidates:
+            if free_slots <= 0:
+                break
+            # A domain at its cap is skipped, not a stopping point -- a queued
+            # task from another site can still take the free slot.
+            key = _domain_key(task.url)
+            if per_domain.get(key, 0) >= MAX_PER_DOMAIN:
+                continue
             self._spawn(task.id)
+            per_domain[key] = per_domain.get(key, 0) + 1
+            free_slots -= 1
 
     def _spawn(self, task_id: str) -> None:
         task = self.tasks[task_id]
@@ -531,6 +556,21 @@ def apply_auto_folder_for_path(filename: str, base_dir: str) -> str:
     else:
         sub = "Other"
     return os.path.join(base_dir, sub, filename)
+
+
+def _domain_key(url: str) -> str:
+    """Group key for the per-domain limit: the last two hostname labels.
+
+    c7.trafficdeposit.com and c10.trafficdeposit.com both map to
+    trafficdeposit.com. Without a public-suffix list, foo.co.uk and
+    bar.co.uk share a key too -- that only makes the limit stricter.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        return ".".join(host.split(".")[-2:])
 
 
 _AUTO_FOLDER_SUBDIRS = {"Video", "Audio", "Documents", "Archives", "Other"}

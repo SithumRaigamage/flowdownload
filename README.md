@@ -120,4 +120,4 @@ signing, bandwidth throttling, an actual automated test suite, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 
 
-./scripts/build_app.sh --version 1.1.0
+./scripts/build_app.sh --version 1.1.2
