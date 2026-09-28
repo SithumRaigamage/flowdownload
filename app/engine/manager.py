@@ -24,6 +24,12 @@ EXTERNAL_POLL_INTERVAL_MS = 2000
 # max_concurrent_downloads. Many parallel streams to the same CDN make it
 # reset/stall connections, which shows up as a wall of RETRYING tasks.
 MAX_PER_DOMAIN = 6
+# Progress ticks arrive ~4x/s per download; persisting each one meant dozens
+# of SQLite commits per second on the main thread. The UI still gets every
+# tick via task_updated -- only the DB write is throttled. Nothing is lost by
+# skipping writes: status changes save the full task, and _load_existing
+# re-reads downloaded_bytes from the .part file on the next launch.
+PROGRESS_SAVE_INTERVAL = 1.0
 HISTORY_LIMIT = 50  # per task; in-memory only, so a restart clears it -- fine for a debugging log
 
 # Module-level reference to workers that didn't exit cleanly on shutdown.
@@ -66,6 +72,7 @@ class DownloadManager(QObject):
         # unwinding from a pause. They're held QUEUED (the worker's final
         # PAUSED signal is ignored for them) and dispatched once it exits.
         self._resume_pending: set[str] = set()
+        self._last_progress_save: dict[str, float] = {}
         # Per-task event log for the UI's detail view -- in-memory only
         # (not persisted), since it's a debugging aid, not state the app
         # needs to survive a restart.
@@ -312,6 +319,7 @@ class DownloadManager(QObject):
 
         self.storage.delete(task_id)
         self.history.pop(task_id, None)
+        self._last_progress_save.pop(task_id, None)
         self.task_removed.emit(task_id)
 
     def apply_settings(self, settings: Settings) -> None:
@@ -443,7 +451,9 @@ class DownloadManager(QObject):
         task.total_bytes = total
         task.speed_bps = speed
         task.updated_at = time.time()
-        self.storage.save(task)
+        if task.updated_at - self._last_progress_save.get(task_id, 0.0) >= PROGRESS_SAVE_INTERVAL:
+            self.storage.save(task)
+            self._last_progress_save[task_id] = task.updated_at
         self.task_updated.emit(task_id)
 
     def _on_metadata_resolved(self, task_id: str, total_bytes: int, etag: str, last_modified: str) -> None:
