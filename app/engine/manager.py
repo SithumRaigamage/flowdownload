@@ -23,7 +23,7 @@ EXTERNAL_POLL_INTERVAL_MS = 2000
 # max_concurrent_downloads file count. Many parallel streams to the same CDN
 # make it reset/stall connections, which shows up as a wall of RETRYING
 # tasks. A split-file download uses several connections from this budget.
-MAX_PER_DOMAIN = 15
+MAX_PER_DOMAIN = 10
 MAX_CONNECTIONS_PER_DOWNLOAD = 8
 # Progress ticks arrive ~4x/s per download; persisting each one meant dozens
 # of SQLite commits per second on the main thread. The UI still gets every
