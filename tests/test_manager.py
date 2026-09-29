@@ -37,7 +37,7 @@ def test_dispatch_respects_per_domain_limit(make_manager):
         spawned.append(task_id)
 
     mgr._spawn = fake_spawn
-    urls = [f"https://a{i % 2}.example.com/f{i}" for i in range(10)] + ["https://other.test/1", "https://other.test/2"]
+    urls = [f"https://a{i % 2}.example.com/f{i}" for i in range(MAX_PER_DOMAIN + 4)] + ["https://other.test/1", "https://other.test/2"]
     for i, url in enumerate(urls):
         task = DownloadTask(url=url, dest_path=f"/tmp/fd-test-{i}")
         task.created_at = time.time() + i
