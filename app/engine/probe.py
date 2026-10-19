@@ -60,6 +60,8 @@ def parse_content_disposition_filename(header: str) -> str | None:
 def probe_identity(url: str, headers: dict | None = None) -> tuple[str, int] | None:
     """Best-effort (etag, total_size) for a URL, used to recognise the same
     file behind a different (e.g. re-signed) link. None on any failure."""
+    # identity: the size is compared against downloads' real (unencoded) totals.
+    headers = {**(headers or {}), "Accept-Encoding": "identity"}
     try:
         validate_download_url(url)
         response = requests.head(url, headers=headers, allow_redirects=True, timeout=PROBE_TIMEOUT)
@@ -68,7 +70,7 @@ def probe_identity(url: str, headers: dict | None = None) -> tuple[str, int] | N
         if not response.ok or not (etag or size):
             # Some servers don't implement HEAD; a one-byte ranged GET gets
             # the same validators plus the full size in Content-Range.
-            response = requests.get(url, headers={**(headers or {}), "Range": "bytes=0-0"},
+            response = requests.get(url, headers={**headers, "Range": "bytes=0-0"},
                                     stream=True, timeout=PROBE_TIMEOUT)
             response.close()
             if not response.ok:

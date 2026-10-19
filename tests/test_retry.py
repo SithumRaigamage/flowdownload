@@ -92,3 +92,16 @@ def test_backoff_is_capped_and_gives_up():
     for attempt in (1, 5, retry_policy.MAX_ATTEMPTS):
         delay = retry_policy.compute_retry_delay(attempt)
         assert 0 < delay <= retry_policy.MAX_DELAY * 1.2
+
+
+def test_resume_rejects_a_range_starting_elsewhere(server, tmp_path, wait, attempts):
+    # A server answering "Range: bytes=100000-" with bytes from 0 used to be
+    # appended after our 100 KB: the right size, the wrong content.
+    (tmp_path / "out.bin.part").write_bytes(DATA[:100_000])
+    worker = DownloadWorker("t", f"{server}/f?badrange=1&delay=0", str(tmp_path / "out.bin"),
+                            '"fixture"', "", "", requests.Session())
+    _WORKERS.append(worker)
+    worker.start()
+    assert wait(lambda: worker.isFinished(), timeout=30)
+    worker.wait()
+    assert (tmp_path / "out.bin").read_bytes() == DATA

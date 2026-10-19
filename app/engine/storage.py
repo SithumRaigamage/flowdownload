@@ -69,7 +69,8 @@ class Storage:
                                   ("cookie_header", "TEXT DEFAULT ''"),
                                   ("digest_sha256", "TEXT DEFAULT ''"),
                                   ("digest_verified", "INTEGER DEFAULT 0"),
-                                  ("referrer", "TEXT DEFAULT ''")):
+                                  ("referrer", "TEXT DEFAULT ''"),
+                                  ("accept_ranges", "INTEGER DEFAULT 0")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
         # Two processes (this app and the Chrome native host, launched fresh
@@ -107,8 +108,8 @@ class Storage:
                 INSERT INTO downloads
                     (id, url, dest_path, filename, total_bytes, downloaded_bytes,
                      status, error_message, etag, last_modified, cookie_header,
-                     digest_sha256, digest_verified, referrer, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -123,6 +124,7 @@ class Storage:
                     digest_sha256=excluded.digest_sha256,
                     digest_verified=excluded.digest_verified,
                     referrer=excluded.referrer,
+                    accept_ranges=excluded.accept_ranges,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -153,12 +155,35 @@ class Storage:
             self._conn.execute("DELETE FROM downloads WHERE id = ?", (task_id,))
             self._conn.commit()
 
+    _COLUMNS = (
+        "id, url, dest_path, filename, total_bytes, downloaded_bytes, "
+        "status, error_message, etag, last_modified, cookie_header, "
+        "digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at"
+    )
+
     def load_all(self) -> list[DownloadTask]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, url, dest_path, filename, total_bytes, downloaded_bytes, "
-                "status, error_message, etag, last_modified, cookie_header, "
-                "digest_sha256, digest_verified, referrer, created_at, updated_at "
-                "FROM downloads ORDER BY created_at DESC"
+                f"SELECT {self._COLUMNS} FROM downloads ORDER BY created_at DESC"
             ).fetchall()
         return [DownloadTask.from_row(row) for row in rows]
+
+    def load_new(self, known_ids: set[str]) -> list[DownloadTask]:
+        """Rows whose id isn't in known_ids. Reads only the id column for the
+        rest, so polling stays cheap however long the history grows."""
+        with self._lock:
+            ids = [row[0] for row in self._conn.execute("SELECT id FROM downloads")]
+            new = [i for i in ids if i not in known_ids]
+            if not new:
+                return []
+            rows = []
+            for start in range(0, len(new), 500):  # stay under SQLite's variable limit
+                chunk = new[start:start + 500]
+                rows += self._conn.execute(
+                    f"SELECT {self._COLUMNS} FROM downloads WHERE id IN ({','.join('?' * len(chunk))})", chunk
+                ).fetchall()
+        return [DownloadTask.from_row(row) for row in rows]
+
+    def dest_paths(self) -> set[str]:
+        with self._lock:
+            return {row[0] for row in self._conn.execute("SELECT dest_path FROM downloads")}

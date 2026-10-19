@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import QThread, Signal
@@ -25,6 +26,7 @@ READ_TIMEOUT = 10
 PROGRESS_EMIT_INTERVAL = 0.25
 SPEED_SMOOTHING = 0.3  # EMA factor: higher = more responsive, lower = steadier ETA
 CONTENT_RANGE_TOTAL_RE = re.compile(r"/(\d+)$")
+CONTENT_RANGE_START_RE = re.compile(r"^bytes\s+(\d+)-")
 
 
 # 4xx statuses that mean "retrying won't help" -- the resource is gone,
@@ -47,7 +49,7 @@ class Paused(Exception):
 class DownloadWorker(QThread):
     progress = Signal(str, int, int, float)  # task_id, downloaded, total, speed_bps
     status_changed = Signal(str, str, str)  # task_id, status_value, error_message
-    metadata_resolved = Signal(str, int, str, str)  # task_id, total_bytes, etag, last_modified
+    metadata_resolved = Signal(str, int, str, str, bool)  # task_id, total_bytes, etag, last_modified, ranges_ok
     digest_computed = Signal(str, str, object)  # task_id, sha256_hex, verified (True/False/None)
     size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
     connections_resolved = Signal(str, int)  # task_id, connections actually in use (may be < granted)
@@ -166,13 +168,33 @@ class DownloadWorker(QThread):
                 return
 
     def _base_headers(self) -> dict:
-        """Headers every request for this download carries."""
+        """Headers every request for this download carries (cookies go
+        separately, through _get)."""
         headers = {}
-        if self.cookie_header:
-            headers["Cookie"] = self.cookie_header
         if self.referrer:
             headers["Referer"] = self.referrer
         return headers
+
+    def _get(self, headers: dict) -> requests.Response:
+        """GET this download's URL with its browser cookies.
+
+        The cookies go in as a per-request jar scoped to the URL's host,
+        not a raw Cookie header: requests drops a hand-set Cookie header
+        when following a redirect (so a same-site redirect lost the login),
+        while a scoped jar is re-applied on every hop it matches -- and
+        never sent to some other host a redirect leads to.
+        """
+        return self._session.get(self.url, headers=headers, cookies=self._cookie_jar(), stream=True,
+                                 timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+
+    def _cookie_jar(self) -> requests.cookies.RequestsCookieJar:
+        jar = requests.cookies.RequestsCookieJar()
+        host = urlparse(self.url).hostname or ""
+        for pair in self.cookie_header.split(";"):
+            name, sep, value = pair.strip().partition("=")
+            if sep and name:
+                jar.set(name, value, domain=host, path="/")
+        return jar
 
     def _interruptible_sleep(self, seconds: float) -> bool:
         """Sleep in small slices so pause/cancel take effect promptly.
@@ -217,14 +239,22 @@ class DownloadWorker(QThread):
             elif self.last_modified:
                 headers["If-Range"] = self.last_modified
 
-        response = self._session.get(
-            self.url,
-            headers=headers,
-            stream=True,
-            timeout=(CONNECT_TIMEOUT, READ_TIMEOUT),
-        )
+        response = self._get(headers)
         try:
             if response.status_code == 206:
+                # The bytes get appended at existing_bytes, so they must
+                # start there. A broken proxy/CDN answering from some other
+                # offset would otherwise yield a file of the right size
+                # with scrambled content. Start over instead: the retry
+                # finds no .part and makes a plain, Range-less request.
+                if self._parse_range_start(response.headers.get("Content-Range", "")) != existing_bytes:
+                    try:
+                        os.remove(self.part_path)
+                    except FileNotFoundError:
+                        pass
+                    raise requests.exceptions.RequestException(
+                        "Server sent a different byte range than asked for — restarting from the beginning"
+                    )
                 mode = "ab"
                 # A missing Content-Length (e.g. chunked transfer encoding,
                 # which some servers use even for a Range response) means
@@ -255,7 +285,7 @@ class DownloadWorker(QThread):
                     self._total_bytes = total
                     return existing_bytes
                 response.raise_for_status()
-                raise requests.exceptions.RequestException(f"Unexpected 416 without resolvable total")
+                raise requests.exceptions.RequestException("Unexpected 416 without resolvable total")
             else:
                 response.raise_for_status()
                 raise requests.exceptions.RequestException(f"Unexpected status {response.status_code}")
@@ -267,7 +297,10 @@ class DownloadWorker(QThread):
             if mode == "wb":
                 self._server_digest_sha256 = _parse_sha256_digest(response.headers.get("Digest"))
 
-            self.metadata_resolved.emit(self.task_id, self._total_bytes, self.etag, self.last_modified)
+            # A 206 proves the server honours ranges; on a 200 only its
+            # Accept-Ranges header can say so.
+            ranges_ok = mode == "ab" or response.headers.get("Accept-Ranges", "").lower() == "bytes"
+            self.metadata_resolved.emit(self.task_id, self._total_bytes, self.etag, self.last_modified, ranges_ok)
             if self._retrying:
                 self._retrying = False
                 self.status_changed.emit(self.task_id, DownloadStatus.DOWNLOADING.value, "")
@@ -278,6 +311,11 @@ class DownloadWorker(QThread):
     @staticmethod
     def _parse_range_total(content_range: str) -> int | None:
         match = CONTENT_RANGE_TOTAL_RE.search(content_range)
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _parse_range_start(content_range: str) -> int | None:
+        match = CONTENT_RANGE_START_RE.match(content_range.strip())
         return int(match.group(1)) if match else None
 
     def _stream_to_file(self, response, mode: str, existing_bytes: int) -> int:

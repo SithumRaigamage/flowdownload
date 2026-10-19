@@ -5,6 +5,7 @@ Everything runs against 127.0.0.1 -- no test touches a real external server.
 from __future__ import annotations
 
 import gc
+import gzip
 import os
 import socket
 import threading
@@ -44,6 +45,13 @@ class _Handler(BaseHTTPRequestHandler):
     status=<n>   reply with this status and an empty body instead
     etag=<s>     serve this ETag (default "fixture"); an If-Range that
                  doesn't match it gets the full body (200), as real servers do
+    gzip=1       gzip a full (non-ranged) body when the client's
+                 Accept-Encoding allows it, as compressing web servers do
+    badrange=1   answer every Range request from byte 0 (with a truthful
+                 Content-Range), like a broken proxy or CDN
+    noranges=1   don't send Accept-Ranges: bytes on a full response
+    setcookie=1  also set a cookie (Set-Cookie: leak=1)
+    redirect=<p> answer 302 to path <p> on this server instead
     """
 
     def log_message(self, *args):
@@ -52,19 +60,25 @@ class _Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
         self.send_response(int(q.get("status", 200)))
-        self.send_header("ETag", '"%s"' % q.get("etag", "fixture"))
+        self.send_header("ETag", f'"{q.get("etag", "fixture")}"')
         self.send_header("Content-Length", str(len(DATA)))
         self.end_headers()
 
     def do_GET(self):
         REQUESTS.append((self.path, dict(self.headers)))
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+        if "redirect" in q:
+            self.send_response(302)
+            self.send_header("Location", q["redirect"])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if "status" in q:
             self.send_response(int(q["status"]))
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        etag = '"%s"' % ETAG_OVERRIDE.get(urlparse(self.path).path, q.get("etag", "fixture"))
+        etag = f'"{ETAG_OVERRIDE.get(urlparse(self.path).path, q.get("etag", "fixture"))}"'
         rng = self.headers.get("Range")
         if_range = self.headers.get("If-Range")
         if rng and if_range and if_range != etag:
@@ -73,9 +87,20 @@ class _Handler(BaseHTTPRequestHandler):
         if rng:
             first, _, last = rng.split("=")[1].partition("-")
             start, end = int(first), (int(last) if last else len(DATA) - 1)
+            if "badrange" in q:
+                start = 0
         body = DATA[start:end + 1]
+        compress = not rng and "gzip" in q and "gzip" in self.headers.get("Accept-Encoding", "")
+        if compress:
+            body = gzip.compress(body)
         self.send_response(206 if rng else 200)
         self.send_header("ETag", etag)
+        if "setcookie" in q:
+            self.send_header("Set-Cookie", "leak=1; Path=/")
+        if "noranges" not in q:
+            self.send_header("Accept-Ranges", "bytes")
+        if compress:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
         if rng:
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(DATA)}")

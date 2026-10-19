@@ -40,7 +40,7 @@ def _save_pixmap(pixmap, path: Path) -> None:
 
 
 def _build_iconset() -> Path:
-    app = QApplication.instance() or QApplication(sys.argv)
+    _app = QApplication.instance() or QApplication(sys.argv)  # QPixmap needs one alive
     ICON_DIR.mkdir(parents=True, exist_ok=True)
 
     # iconset filenames follow a strict convention: <size> or <size>@2x.

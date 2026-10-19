@@ -58,8 +58,12 @@ pip install -r requirements.txt
 
 ```bash
 pip install -r requirements-dev.txt   # once
-python -m pytest                      # ~15 s, local server only
+python -m pytest                      # ~70 s, local server only
 ```
+
+`requirements.lock` pins the exact versions CI tests against
+(`.github/workflows/ci.yml`); `pip install -r requirements.lock` reproduces
+that environment.
 
 ## How downloads behave
 
@@ -87,25 +91,45 @@ python -m pytest                      # ~15 s, local server only
   download (same site, and the same filename, ETag or size).
 - **Quitting doesn't lose progress**: interrupted downloads resume on the
   next launch. Downloads you paused yourself stay paused.
-- **Cancel** stops a download and deletes its partial file. **Remove** takes
-  it off the list and keeps the file; **Delete file…** (right-click a
-  completed download) removes it from disk too.
+- **Cancel** (right-click, or the detail panel) stops a download and deletes
+  its partial file. **Remove** takes it off the list and keeps a completed
+  file; for an unfinished one it asks first, since its partial data is
+  discarded. **Delete file…** (right-click a completed download) removes it
+  from disk too.
+- **In-app preview** of video/audio needs `ffmpeg` (`brew install ffmpeg`)
+  for formats Qt's built-in player can't decode, such as H.264/AAC; without
+  it the player says so instead of loading forever.
 
 ## Installing the Chrome extension
 
-The extension and its native messaging host are already generated and
-registered with Chrome — you only need to load the extension itself, since
-Chrome's UI can't be scripted from the command line.
+First register the native messaging host (the small program Chrome hands
+downloads to):
+
+```bash
+source venv/bin/activate
+python scripts/setup_chrome_integration.py   # or: --app /path/to/FlowDownload.app
+```
+
+If FlowDownload.app is installed in `/Applications` or `~/Applications`, this
+registers the host bundled inside it, so the integration no longer depends on
+this source folder or its venv. Otherwise it registers a launcher for this
+checkout. Either way it prints the folder to load in the next step; Chrome's
+UI can't be scripted from the command line.
 
 1. Open `chrome://extensions`
 2. Turn on **Developer mode** (top right)
-3. Click **Load unpacked** and select:
-   ```
-   /Users/sithumraigamage/projects/flowdownload/chrome_extension
-   ```
+3. Click **Load unpacked** and select the folder the setup script printed:
+   `FlowDownload.app/Contents/Resources/chrome_extension` for an installed
+   app, or this checkout's `chrome_extension/`
 4. That's it. From then on:
-   - **Every download Chrome starts** gets cancelled instantly and handed to
+   - **Every download Chrome starts** is paused instantly and handed to
      FlowDownload instead — this is what fixes flaky-connection failures.
+     Chrome's copy is removed only once FlowDownload confirms it queued the
+     download; if the hand-off fails, it carries on in Chrome.
+   - The extension's popup has a switch to stop sending downloads, and a
+     list of sites whose downloads should stay in Chrome (useful for
+     downloads that only work in the browser, e.g. ones started by
+     submitting a form).
    - **Right-click any link, image, video, or audio** → "Download with
      FlowDownload" also sends it over, for things Chrome wouldn't otherwise
      treat as a download.
@@ -115,10 +139,11 @@ Chrome's UI can't be scripted from the command line.
 buttons) aren't externally fetchable, so those are left to download through
 Chrome normally — you'll still see them in Chrome's download bar.
 
-### If you ever move the project folder
+### If you ever move the project folder (or the app)
 
-The native host registration and the extension's key both reference this
-folder's current path. If you move it, re-run:
+When registered against this checkout rather than an installed app, the
+native host registration references this folder's current path. If you move
+it, or install the app after the fact, re-run:
 
 ```bash
 source venv/bin/activate
@@ -137,6 +162,10 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
 ```
 
 ## Troubleshooting
+
+- **Logs**: when launched from Finder or the Dock, the app writes its
+  diagnostics to `~/.flowdownload/flowdownload.log` (the previous one is
+  kept as `.log.1`). Run from a terminal, they go to the terminal instead.
 
 - **"Download with FlowDownload" does nothing / extension shows an error** —
   make sure FlowDownload has been launched at least once so
@@ -158,6 +187,6 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
 ## Roadmap
 
 Known gaps and possible future work (platform support beyond macOS, code
-signing, bandwidth throttling, UI tests, etc.) are
+signing, bandwidth throttling, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 

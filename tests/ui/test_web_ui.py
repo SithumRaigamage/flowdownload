@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 
 import pytest
@@ -18,12 +17,6 @@ from app.version import APP_VERSION
 pytestmark = pytest.mark.ui
 
 SLOW = "delay=0.2"  # ~2.6 s per file: stays active long enough to inspect
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 class Page:
@@ -68,11 +61,10 @@ class Page:
 def ui(qapp, wait, make_manager, tmp_path):
     def _open(**settings):
         mgr = make_manager(**settings)
-        server = ApiServer(mgr, str(tmp_path / "settings.json"), port=_free_port(),
-                           app_data_dir=str(tmp_path / "appdata"))
+        server = ApiServer(mgr, str(tmp_path / "settings.json"), app_data_dir=str(tmp_path / "appdata"))
         server.start()
         opened.append(server)
-        return mgr, Page(qapp, wait, f"http://127.0.0.1:{server.port}/")
+        return mgr, Page(qapp, wait, server.page_url)
 
     opened = []
     yield _open
@@ -144,6 +136,41 @@ def test_delete_file_dialog(ui, server, wait):
     assert task.id not in mgr.tasks
 
 
+def _open_menu(page, task_id):
+    page.js(f"document.querySelector('.row[data-id=\"{task_id}\"]')"
+            ".dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, clientX: 20, clientY: 20}))")
+
+
+def test_removing_an_unfinished_download_asks_before_discarding(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/f?delay=0.05", "f.bin")]
+    assert wait(lambda: task.downloaded_bytes > 100_000)
+    mgr.pause(task.id)
+    assert page.wait_js(page.row(task.id, ".badge") + "?.textContent === 'Paused'")
+    _open_menu(page, task.id)
+    page.js("document.querySelector('#ctxmenu [data-m=\"remove\"]').click()")
+    assert page.wait_js("!!document.getElementById('remGo')")
+    assert page.js("document.activeElement.textContent") == "Keep"  # the safe default
+    page.js("document.querySelector('[data-close]').click()")
+    assert page.wait_js("!document.getElementById('remGo')")
+    assert task.id in mgr.tasks  # "Keep" left it alone
+    _open_menu(page, task.id)
+    page.js("document.querySelector('#ctxmenu [data-m=\"remove\"]').click()")
+    assert page.wait_js("!!document.getElementById('remGo')")
+    page.js("document.getElementById('remGo').click()")
+    assert wait(lambda: task.id not in mgr.tasks)
+
+
+def test_cancel_from_the_menu(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/f?{SLOW}", "f.bin")]
+    assert page.wait_js(page.row(task.id, ".badge") + "?.textContent === 'Downloading'")
+    _open_menu(page, task.id)
+    page.js("document.querySelector('#ctxmenu [data-m=\"cancel\"]').click()")
+    assert wait(lambda: task.status == S.CANCELLED)
+    assert page.wait_js(page.row(task.id, ".badge") + "?.textContent === 'Cancelled'")
+
+
 def test_refresh_link_dialog_resumes_download(ui, server, wait):
     mgr, page = ui()
     task = mgr.tasks[mgr.add_download(f"{server}/old?delay=0.05", "movie.mp4")]
@@ -179,3 +206,40 @@ def test_connections_setting_saves(ui):
     page.js("document.getElementById('setConnSave').click()")
     assert page.wait_js("settingsCache.connections_per_download === 2")
     assert mgr.settings.connections_per_download == 2
+
+
+def test_reconnect_resyncs_events_missed_while_disconnected(ui, server, wait):
+    mgr, page = ui()
+    # Drop the socket and add a download before it reconnects (~1 s later):
+    # its "added" event goes nowhere, so only a re-sync can show it.
+    page.js("(ws.onclose = () => { ui.wsConnected = false; setTimeout(connectWS, 1000); }, ws.close(), true)")
+    assert page.wait_js("ui.wsConnected === false")
+    task = mgr.tasks[mgr.add_download(f"{server}/missed?{SLOW}", "missed.bin")]
+    assert page.wait_js("ui.wsConnected === true")
+    assert page.wait_js(f"!!document.querySelector('.row[data-id=\"{task.id}\"]')")
+
+
+def test_closing_the_player_stops_its_polling(ui, wait, monkeypatch, tmp_path):
+    # The poll used to outlive the modal and start playback on the detached
+    # <video> once the transcode finished.
+    from app.engine.models import DownloadTask
+    from app.media import transcode
+
+    monkeypatch.setattr(transcode, "probe_media", lambda path: (True, 60.0))
+    monkeypatch.setattr(transcode, "get_or_build", lambda *a, **k: None)  # stays "pending"
+    mgr, page = ui()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"\x00" * 64)
+    task = DownloadTask(url="http://127.0.0.1:1/clip.mp4", dest_path=str(clip), filename="clip.mp4",
+                        status=S.COMPLETED)
+    mgr.storage.save(task)
+    mgr._poll_external_changes()
+    assert page.wait_js(f"downloads.some(d => d.id === '{task.id}')")
+    page.js("(window._polls = 0, window._fetch = window.fetch, window.fetch = (u, o) =>"
+            " (String(u).includes('transcode-status') && window._polls++, window._fetch(u, o)), true)")
+    page.js(f"(setView('library'), openLibPlayer('{task.id}'), true)")
+    assert page.wait_js("window._polls >= 2", timeout=10)
+    page.js("(closeLibPlayer(), true)")
+    after_close = page.js("window._polls")
+    wait(lambda: False, timeout=5)
+    assert page.js("window._polls") <= after_close + 1  # at most one already in flight

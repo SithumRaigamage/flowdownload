@@ -16,6 +16,7 @@ shot, before the extension is ever loaded.
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import json
@@ -71,14 +72,41 @@ def write_manifest_key(pubkey_der: bytes) -> None:
     print(f"Wrote signing key into {manifest_path}")
 
 
-def register_native_host(extension_id: str) -> None:
-    host_script = os.path.join(NATIVE_HOST_DIR, "flowdownload_host.py")
-    os.chmod(host_script, 0o755)
+APP_BUNDLE_CANDIDATES = (
+    "/Applications/FlowDownload.app",
+    os.path.join(os.path.expanduser("~"), "Applications", "FlowDownload.app"),
+)
+BUNDLED_HOST = os.path.join("Contents", "MacOS", "flowdownload-host")
+SOURCE_LAUNCHER = os.path.join(KEY_DIR, "flowdownload-host")
 
+
+def host_executable(app_bundle: str | None) -> str:
+    """What Chrome should run: the host inside an installed FlowDownload.app
+    if there is one (self-contained -- no checkout or venv needed), else a
+    launcher for this source checkout."""
+    bundles = [app_bundle] if app_bundle else APP_BUNDLE_CANDIDATES
+    for bundle in bundles:
+        candidate = os.path.join(bundle, BUNDLED_HOST)
+        if os.access(candidate, os.X_OK):
+            return candidate
+    if app_bundle:
+        sys.exit(f"{app_bundle} has no {BUNDLED_HOST} -- rebuild it with scripts/build_app.sh")
+    # Pin this interpreter (the one with the dependencies installed) rather
+    # than relying on the script's shebang, which used to hard-code one
+    # machine's venv path.
+    host_script = os.path.join(NATIVE_HOST_DIR, "flowdownload_host.py")
+    os.makedirs(KEY_DIR, exist_ok=True)
+    with open(SOURCE_LAUNCHER, "w") as f:
+        f.write(f'#!/bin/sh\nexec "{sys.executable}" "{host_script}" "$@"\n')
+    os.chmod(SOURCE_LAUNCHER, 0o755)
+    return SOURCE_LAUNCHER
+
+
+def register_native_host(extension_id: str, host_path: str) -> None:
     host_manifest = {
         "name": HOST_NAME,
         "description": "FlowDownload native messaging host",
-        "path": host_script,
+        "path": host_path,
         "type": "stdio",
         "allowed_origins": [f"chrome-extension://{extension_id}/"],
     }
@@ -88,9 +116,15 @@ def register_native_host(extension_id: str) -> None:
         json.dump(host_manifest, f, indent=2)
         f.write("\n")
     print(f"Registered native messaging host: {dest}")
+    print(f"  -> {host_path}")
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--app", help="register the host bundled in this FlowDownload.app "
+                        "(default: an installed one in /Applications or ~/Applications, else this checkout)")
+    args = parser.parse_args()
+
     if subprocess.run(["which", "openssl"], stdout=subprocess.DEVNULL).returncode != 0:
         print("openssl not found on PATH -- required to generate the extension key.", file=sys.stderr)
         sys.exit(1)
@@ -98,7 +132,14 @@ def main() -> None:
     pubkey_der = ensure_keypair()
     extension_id = compute_extension_id(pubkey_der)
     write_manifest_key(pubkey_der)
-    register_native_host(extension_id)
+    host_path = host_executable(args.app)
+    register_native_host(extension_id, host_path)
+    extension_dir = EXTENSION_DIR
+    if host_path.endswith(BUNDLED_HOST):
+        # Load the copy shipped in the app too, so nothing depends on this
+        # checkout -- and reinstalling the app updates the extension with it.
+        bundle = host_path[: -len(BUNDLED_HOST)]
+        extension_dir = os.path.join(bundle, "Contents", "Resources", "chrome_extension")
 
     print()
     print("Setup complete. Extension ID (fixed, won't change on reload):")
@@ -108,7 +149,7 @@ def main() -> None:
     print("  1. Open chrome://extensions")
     print("  2. Enable \"Developer mode\" (top right)")
     print("  3. Click \"Load unpacked\" and select:")
-    print(f"     {EXTENSION_DIR}")
+    print(f"     {extension_dir}")
     print("  4. Right-click any link, image, or video and choose")
     print("     \"Download with FlowDownload\".")
 

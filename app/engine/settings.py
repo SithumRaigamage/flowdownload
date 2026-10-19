@@ -35,7 +35,7 @@ class Settings:
     site_connection_limit: int = 0
 
     @classmethod
-    def load(cls, path: str) -> "Settings":
+    def load(cls, path: str) -> Settings:
         if not os.path.exists(path):
             return cls()
         try:
@@ -43,10 +43,28 @@ class Settings:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             return cls()
-        known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if not isinstance(data, dict):
+            return cls()
+        defaults = cls()
+        known = {}
+        for key, value in data.items():
+            if key not in cls.__dataclass_fields__:
+                continue
+            # A hand-edited or corrupted value of the wrong type (e.g.
+            # "3" for max_concurrent_downloads) would crash the dispatcher
+            # later; fall back to that one setting's default instead.
+            expected = type(getattr(defaults, key))
+            if expected is int and isinstance(value, bool):
+                continue
+            if isinstance(value, expected):
+                known[key] = value
         return cls(**known)
 
     def save(self, path: str) -> None:
+        # tmp + os.replace: a crash mid-write used to leave truncated JSON,
+        # which load() then silently replaced with all defaults.
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(asdict(self), f, indent=2)
+        os.replace(tmp, path)

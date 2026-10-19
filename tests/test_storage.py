@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from app.engine.models import DownloadTask
 from app.engine.storage import Storage
 
 # The downloads table as it was before the referrer column existed.
@@ -32,3 +33,14 @@ def test_old_database_gains_referrer_column(tmp_path):
     task.referrer = "https://page.test/"
     storage.save(task)
     assert Storage(str(db)).load_all()[0].referrer == "https://page.test/"
+
+
+def test_load_new_returns_only_unknown_rows(tmp_path):
+    storage = Storage(str(tmp_path / "t.db"))
+    known = DownloadTask(url="http://x/a", dest_path="/d/a")
+    fresh = DownloadTask(url="http://x/b", dest_path="/d/b")
+    storage.save(known)
+    storage.save(fresh)
+    assert [t.id for t in storage.load_new({known.id})] == [fresh.id]
+    assert storage.load_new({known.id, fresh.id}) == []
+    assert storage.dest_paths() == {"/d/a", "/d/b"}

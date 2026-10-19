@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.engine.models import DownloadTask
 from app.engine.settings import Settings
@@ -31,7 +32,7 @@ class DownloadOut(BaseModel):
     updated_at: float
 
     @classmethod
-    def from_task(cls, task: DownloadTask) -> "DownloadOut":
+    def from_task(cls, task: DownloadTask) -> DownloadOut:
         return cls(
             id=task.id,
             url=task.url,
@@ -43,7 +44,8 @@ class DownloadOut(BaseModel):
             error_message=task.error_message,
             speed_bps=task.speed_bps,
             progress=task.progress,
-            accept_ranges=bool(task.etag or task.last_modified),
+            # "Resumable": ranges supported AND a validator for If-Range.
+            accept_ranges=task.accept_ranges and bool(task.etag or task.last_modified),
             etag=task.etag,
             last_modified=task.last_modified,
             # The cookie value itself is session-auth material -- the UI only
@@ -104,7 +106,7 @@ class SettingsOut(BaseModel):
     site_connection_limit: int
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "SettingsOut":
+    def from_settings(cls, settings: Settings) -> SettingsOut:
         return cls(
             download_dir=settings.download_dir,
             max_concurrent_downloads=settings.max_concurrent_downloads,
@@ -119,13 +121,25 @@ class SettingsOut(BaseModel):
 
 class SettingsPatch(BaseModel):
     download_dir: str | None = None
-    max_concurrent_downloads: int | None = None
+    # Same bounds as the UI's stepper (SLOT_MIN/SLOT_MAX in index.html); 0 or
+    # less would leave every download queued forever.
+    max_concurrent_downloads: int | None = Field(default=None, ge=1, le=50)
     notifications_enabled: bool | None = None
     minimize_to_tray: bool | None = None
     auto_folder_by_type: bool | None = None
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
     site_connection_limit: int | None = Field(default=None, ge=0, le=50)
+
+    @field_validator("download_dir")
+    @classmethod
+    def _existing_absolute_dir(cls, value: str | None) -> str | None:
+        # The UI only ever sends what the folder picker returned; anything
+        # else (relative, missing, a file) would surface later as every
+        # download failing on write.
+        if value is not None and not (os.path.isabs(value) and os.path.isdir(value)):
+            raise ValueError("Download folder must be an existing folder")
+        return value
 
 
 class RefreshUrlRequest(BaseModel):

@@ -49,7 +49,9 @@ Not published to the Chrome Web Store. Works fine long-term for personal
 use, but: it only exists on this machine, Chrome may occasionally show a
 "Disable developer mode extensions" style nag depending on Chrome's current
 policy, and there's no auto-update mechanism for it — changes require
-reloading it manually from `chrome://extensions`.
+reloading it manually from `chrome://extensions`. (Loaded from the copy
+inside an installed FlowDownload.app, reinstalling the app updates the files;
+Chrome still needs that reload to pick them up.)
 
 ### No auto-update for the app itself
 New builds require manually re-copying `dist/FlowDownload.app` to
@@ -77,11 +79,10 @@ retroactively pulls in what's already in `chrome://downloads`.
 
 ## Testing
 
-### Test suite covers the engine, not the UI
-`tests/` (run with `venv/bin/python -m pytest`) exercises the download
-engine, native host and API page against a local `http.server` fixture:
-retries and backoff, the per-site limit, pause/resume, cancel, quit and
-relaunch, overwrite, auto-folder, and progress-write throttling. Not
-covered: the web UI in `app/web/index.html` (no browser-driven tests), the
-Qt tray/window layer, ffmpeg transcoding, and the real Chrome
-native-messaging round-trip.
+### What the test suite doesn't cover
+`tests/` (run with `venv/bin/python -m pytest`, and in CI) exercises the
+download engine, API, native host, the extension's `background.js` (under
+Node with a fake `chrome` API, `tests/chrome_harness.js`) and the web UI
+(offscreen QtWebEngine, `tests/ui/`) against a local `http.server` fixture.
+Not covered: the Qt tray/window layer, an actual ffmpeg transcode (only its
+failure and caching paths), the extension popup, and real Chrome.

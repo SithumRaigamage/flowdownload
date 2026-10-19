@@ -122,3 +122,24 @@ def test_one_connection_setting_never_splits(make_manager, server, wait):
     task = mgr.tasks[mgr.add_download(f"{server}/one", "one.bin")]
     assert wait(lambda: task.status == S.COMPLETED)
     assert ranges("/one") == [None]  # a single plain GET, no probe
+
+
+def test_misplaced_ranges_fall_back_to_a_clean_single_stream(make_manager, server, wait):
+    # A 206 for the wrong offset was written at the requested one: a
+    # silently scrambled file that still passed the size check.
+    mgr = make_manager(connections_per_download=4)
+    task = mgr.tasks[mgr.add_download(f"{server}/bad?badrange=1&delay=0", "bad.bin")]
+    assert wait(lambda: task.status in (S.COMPLETED, S.FAILED))
+    assert open(task.dest_path, "rb").read() == DATA
+
+
+def test_idle_connections_split_the_remaining_work(make_manager, server, wait, monkeypatch):
+    # Resuming with a single unfinished piece used to download it over one
+    # connection, however many were granted.
+    monkeypatch.setattr(segmented, "_split", lambda total, n: [segmented._Segment(0, total - 1)])
+    mgr = make_manager(connections_per_download=4)
+    task = mgr.tasks[mgr.add_download(f"{server}/one?delay=0.05", "one.bin")]
+    assert wait(lambda: task.status == S.COMPLETED)
+    assert open(task.dest_path, "rb").read() == DATA
+    assert CONNECTIONS["peak"] >= 3
+    assert len([r for r in ranges("/one") if r and not r.endswith("-")]) >= 3  # stolen tails

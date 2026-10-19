@@ -132,3 +132,36 @@ def test_other_sites_and_finished_downloads_never_match(host_env):
     stalled(storage, root, "https://cdn.test/a/clip.mp4", "clip.mp4", status=S.COMPLETED)
     assert "refreshed" not in host.handle_message({"url": "https://cdn.test/b/movie.mp4"})
     assert "refreshed" not in host.handle_message({"url": "https://cdn.test/b/clip.mp4"})
+
+
+def test_same_name_but_different_size_is_a_new_download(host_env, server):
+    # Sites reuse generic names; a name match alone used to hijack an
+    # unrelated stalled download instead of queueing this one.
+    root = host_env()
+    storage = Storage(host.DB_PATH)
+    stalled(storage, root, "http://127.0.0.1:1/old/video.mp4", "video.mp4", total=123)
+    response = host.handle_message({"url": f"{server}/new/video.mp4"})
+    assert "refreshed" not in response
+    assert len(Storage(host.DB_PATH).load_all()) == 2
+    assert storage.pop_refreshes() == []
+
+
+def test_setup_registers_a_launcher_that_runs_the_host(tmp_path, monkeypatch):
+    # The host's shebang used to hard-code one machine's venv path.
+    import importlib.util
+    import struct
+    import subprocess
+
+    spec = importlib.util.spec_from_file_location(
+        "setup_chrome", os.path.join(os.path.dirname(__file__), "..", "scripts", "setup_chrome_integration.py"))
+    setup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    monkeypatch.setattr(setup, "KEY_DIR", str(tmp_path))
+    monkeypatch.setattr(setup, "SOURCE_LAUNCHER", str(tmp_path / "flowdownload-host"))
+    monkeypatch.setattr(setup, "APP_BUNDLE_CANDIDATES", (str(tmp_path / "missing.app"),))
+    launcher = setup.host_executable(None)
+    assert launcher == str(tmp_path / "flowdownload-host")
+    ping = json.dumps({"action": "ping"}).encode()
+    proc = subprocess.run([launcher, "chrome-extension://x/"], input=struct.pack("<I", len(ping)) + ping,
+                          capture_output=True, env={**os.environ, "HOME": str(tmp_path)}, timeout=30)
+    assert proc.stdout[4:] == b'{"ok": true}', proc.stderr.decode()

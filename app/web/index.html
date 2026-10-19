@@ -1220,6 +1220,20 @@ function openLibPlayer(id){
   const statusUrl="/api/downloads/"+encodeURIComponent(id)+"/transcode-status";
   let pollTimer=null;
   let seeking=false;  // user is dragging the seek thumb — pause timeupdate
+  // Set by closeLibPlayer (via ctrl._teardown). The status poll outlives
+  // the modal otherwise -- and once the transcode finished it started
+  // playback on the detached <video>: audio with no player on screen.
+  let closed=false;
+
+  function showProblem(message){
+    if(!overlay) return;
+    mediaEl.style.display="none";
+    overlay.style.display="flex";
+    const text=document.createElement("div");
+    text.style.cssText="max-width:340px;text-align:center;line-height:1.5";
+    text.textContent=message;
+    overlay.replaceChildren(text);
+  }
 
   // Unicode glyphs swapped in place when toggling play/pause and
   // mute/unmute. We use plain text characters rather than <svg>
@@ -1289,8 +1303,9 @@ function openLibPlayer(id){
   });
   // Cancel `seeking` if the user lets go of the thumb anywhere
   // off the document, or if focus is lost mid-drag.
-  window.addEventListener("mouseup",()=>{ if(seeking) seeking=false; });
-  window.addEventListener("blur",()=>{ if(seeking) seeking=false; });
+  const stopSeeking=()=>{ seeking=false; };
+  window.addEventListener("mouseup", stopSeeking);
+  window.addEventListener("blur", stopSeeking);
 
   muteBtn.onclick=()=>{
     mediaEl.muted=!mediaEl.muted;
@@ -1326,7 +1341,13 @@ function openLibPlayer(id){
     else if((e.key==="f"||e.key==="F") && fsBtn){ e.preventDefault(); fsBtn.click(); }
   };
   window.addEventListener("keydown", onKey);
-  if(ctrl) ctrl._keyHandler=onKey;
+  if(ctrl) ctrl._teardown=()=>{
+    closed=true;
+    if(pollTimer){ clearTimeout(pollTimer); pollTimer=null; }
+    window.removeEventListener("keydown", onKey);
+    window.removeEventListener("mouseup", stopSeeking);
+    window.removeEventListener("blur", stopSeeking);
+  };
 
   // Two paths to get the WebM:
   //   1. Cache hit (state=cached in /transcode-status): assign the
@@ -1340,9 +1361,11 @@ function openLibPlayer(id){
 
   function startPlayback(){
     if(pollTimer){clearTimeout(pollTimer); pollTimer=null;}
+    if(closed) return;
     mediaEl.onerror=()=>{
       const e=mediaEl.error;
       console.warn("[libPlayer] media error code="+(e?e.code:"null")+" msg="+(e&&e.message));
+      showProblem("This file can't be played here. Use Show in Finder to open it in another app.");
     };
     mediaEl.style.display="block";
     if(overlay) overlay.style.display="none";
@@ -1374,13 +1397,16 @@ function openLibPlayer(id){
   }
 
   function pollTranscodeStatus(){
+    if(closed) return;
     fetch(statusUrl,{headers:{"Authorization":"Bearer "+TOKEN}})
       .then(r=>r.ok ? r.json() : Promise.reject(new Error("HTTP "+r.status)))
       .then(s=>{
+        if(closed) return;
         if(s.state==="cached"){
           startPlayback();
           return;
         }
+        if(s.state==="failed"){ showProblem(s.error||"This file couldn't be prepared for preview."); return; }
         // pending or transcoding -- show whatever progress we have
         // and keep polling. 1% is the floor so the bar animates
         // even before any bytes are written.
@@ -1391,7 +1417,7 @@ function openLibPlayer(id){
       })
       .catch(err=>{
         console.warn("[libPlayer] status poll failed:", err);
-        pollTimer=setTimeout(pollTranscodeStatus, 2000);
+        if(!closed) pollTimer=setTimeout(pollTranscodeStatus, 2000);
       });
   }
 
@@ -1406,10 +1432,10 @@ function closeLibPlayer(){
   // server side sees the client disconnect and tears down cleanly.
   const m=document.getElementById("libMedia");
   if(m){ m.pause(); m.removeAttribute("src"); m.load(); }
-  // Drop the keyboard shortcut listener we attached in startPlayback
-  // so it doesn't fire on a stale modal.
+  // Stop the transcode poll and drop the window listeners openLibPlayer
+  // attached, so nothing fires on (or starts playing) a stale modal.
   const ctrl=document.getElementById("libCtrl");
-  if(ctrl && ctrl._keyHandler) window.removeEventListener("keydown", ctrl._keyHandler);
+  if(ctrl && ctrl._teardown) ctrl._teardown();
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   const s=document.getElementById("libScrim");
   if(s){ s.style.opacity="0";s.style.transition="opacity .15s";setTimeout(()=>s.remove(),160); }
@@ -1644,6 +1670,7 @@ function renderSheet(){
       (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-outline btn-sm" data-act="pause" data-id="'+d.id+'">'+PAUSE+' Pause</button>':'')+
       (d.state==="paused"||d.state==="queued"?'<button class="btn btn-outline btn-sm" data-act="resume" data-id="'+d.id+'">'+PLAY+' Resume</button>':'')+
       (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-primary btn-sm" data-act="retry" data-id="'+d.id+'">'+RETRY+' Retry</button>':'')+
+      (["downloading","retrying","queued","paused"].includes(d.state)?'<button class="btn btn-outline btn-sm" data-act="cancel" data-id="'+d.id+'">Cancel</button>':'')+
       (d.state==="completed"?'<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>':'')+
       (isMediaDownload(d)?'<button class="btn btn-primary btn-sm" data-act="play" data-id="'+d.id+'">'+PLAY+' Preview</button>':'')+
       '<button class="btn btn-ghost btn-sm" data-act="copy" data-id="'+d.id+'">Copy link</button>'+
@@ -1714,14 +1741,11 @@ async function act(id,what){
       if(ui.view==="library"){ openLibPlayer(id); }
       else { ui.activeId = id; ui.tab = "preview"; render(); }
     }
-    else if(what==="remove"){
-      await del("/api/downloads/"+id+"?delete_file=false");
-      downloads=downloads.filter(x=>x.id!==id); ui.selected.delete(id);
-      thumbCache.delete(id);
-      if(ui.activeId===id) ui.activeId=null;
-      toast("info","Removed from list","The file on disk was kept");
-      render();
+    else if(what==="cancel"){
+      await post("/api/downloads/"+id+"/cancel");
+      toast("info","Cancelled",d.received>0?"Downloaded data was discarded":d.name);
     }
+    else if(what==="remove") removeDownloads([d]);
     else if(what==="deletefile") confirmDeleteFile(d);
     else if(what==="refresh") refreshLinkDialog(d);
   }catch(err){ toast("err","Action failed",err.message); }
@@ -1748,6 +1772,35 @@ function refreshLinkDialog(d){
       closeOverlay(); toast("ok","Link refreshed",d.name); render();
     }catch(err){ toast("err","Couldn't refresh link",err.message); }
   };
+}
+
+// Remove from the list. A completed file always stays on disk, but an
+// unfinished download's partial data is discarded with it (nothing could
+// resume it any more) -- so that case asks first instead of claiming the
+// file was kept.
+async function removeDownloads(items){
+  const partial=items.filter(d=>d.state!=="completed" && d.received>0);
+  const go=async()=>{
+    try{
+      await Promise.all(items.map(d=>del("/api/downloads/"+d.id+"?delete_file=false")));
+      const ids=new Set(items.map(d=>d.id));
+      downloads=downloads.filter(x=>!ids.has(x.id));
+      ids.forEach(id=>{ ui.selected.delete(id); thumbCache.delete(id); });
+      if(ids.has(ui.activeId)) ui.activeId=null;
+      const title=items.length===1?"Removed from list":"Removed "+items.length+" downloads";
+      toast("info",title,partial.length?"Unfinished downloads' partial data was discarded":"Files on disk were kept");
+      render();
+    }catch(err){ toast("err","Couldn't remove",err.message); }
+  };
+  if(!partial.length){ await go(); return; }
+  const bytes=partial.reduce((n,d)=>n+d.received,0);
+  const what=partial.length===1?'<b>'+esc(partial[0].name)+'</b> isn\'t finished':partial.length+' of these downloads aren\'t finished';
+  const dlg=overlay('<div class="dialog" style="max-width:420px" role="alertdialog" aria-modal="true" aria-labelledby="remTitle">'+
+    '<div class="dialog-head"><h2 id="remTitle">Discard partial data?</h2>'+
+    '<p>'+what+'. Removing '+(items.length===1?'it':'them')+' deletes the '+esc(fmtBytes(bytes))+' downloaded so far. Completed files are kept.</p></div>'+
+    '<div class="dialog-foot"><button class="btn btn-ghost" data-close>Keep</button>'+
+    '<button class="btn btn-primary" id="remGo" style="background:var(--destructive)">Remove and discard</button></div></div>');
+  dlg.querySelector("#remGo").onclick=async()=>{ closeOverlay(); await go(); };
 }
 
 // Remove from the list AND delete the file from disk. Permanent (not the
@@ -1812,6 +1865,7 @@ function openMenu(anchor,id){
   if(d.state==="downloading"||d.state==="retrying") items.push(["pause","Pause"]);
   if(d.state==="paused"||d.state==="queued") items.push(["resume","Resume"]);
   if(d.state==="failed"||d.state==="cancelled") items.push(["retry","Retry now"]);
+  if(["downloading","retrying","queued","paused"].includes(d.state)) items.push(["cancel","Cancel"]);
   if(d.state==="completed") items.push(["reveal","Show in Finder"]);
   if(d.state!=="completed") items.push(["refresh","Refresh link…"]);
   items.push(["copy","Copy source link"]);
@@ -1913,19 +1967,12 @@ document.getElementById("bulkbar").addEventListener("click",async e=>{
   if(w==="clear"){ ui.selected.clear(); render(); return; }
   if(ui.selected.size===0) return;
   const ids=[...ui.selected];
+  if(w==="remove"){ removeDownloads(downloads.filter(d=>ui.selected.has(d.id))); return; }
   try{
     if(w==="pause") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/pause")));
     if(w==="resume") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/resume")));
     if(w==="retry") await Promise.all(ids.map(id=>post("/api/downloads/"+id+"/retry")));
-    if(w==="remove"){
-      await Promise.all(ids.map(id=>del("/api/downloads/"+id+"?delete_file=false")));
-      downloads=downloads.filter(d=>!ids.includes(d.id));
-      ids.forEach(id=>thumbCache.delete(id));
-      ui.selected = new Set();
-      ui.activeId = null;
-    }
-    if(w==="remove") toast("info", "Removed "+ids.length+" downloads", "Files are kept on disk");
-    else toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
+    toast("info", w[0].toUpperCase()+w.slice(1)+" "+ids.length+" downloads");
   }catch(err){ toast("err","Bulk action failed",err.message); }
   ui.selected.clear(); render();
 });
@@ -2235,11 +2282,25 @@ window.addEventListener("drop",e=>{ e.preventDefault(); dragDepth=0; dz.classLis
   addDialog(url); });
 
 /* ---------- live connection ---------- */
-let ws=null, wsRetryMs=1000;
+let ws=null, wsRetryMs=1000, wsEverConnected=false;
 function connectWS(){
   const proto = location.protocol==="https:" ? "wss:" : "ws:";
   ws=new WebSocket(proto+"//"+location.host+"/api/events?token="+encodeURIComponent(TOKEN));
-  ws.onopen=()=>{ ui.wsConnected=true; wsRetryMs=1000; renderStats(); };
+  ws.onopen=async()=>{
+    const reconnect=wsEverConnected;
+    wsEverConnected=true; ui.wsConnected=true; wsRetryMs=1000; renderStats();
+    // Events sent while we were disconnected are gone for good, so a
+    // reconnect re-reads the whole list instead of trusting a stale one.
+    if(reconnect){
+      try{
+        downloads=(await getJSON("/api/downloads")).map(normalize);
+        const ids=new Set(downloads.map(d=>d.id));
+        ui.selected=new Set([...ui.selected].filter(id=>ids.has(id)));
+        if(ui.activeId && !ids.has(ui.activeId)) ui.activeId=null;
+        render();
+      }catch(_){}
+    }
+  };
   ws.onmessage=e=>{
     const msg=JSON.parse(e.data);
     if(msg.type==="added"){ upsert(msg.download); render(); }

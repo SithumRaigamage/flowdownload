@@ -1,4 +1,4 @@
-#!/Users/sithumraigamage/projects/flowdownload/venv/bin/python3
+#!/usr/bin/env python3
 """Chrome native messaging host for FlowDownload.
 
 Chrome launches this script (per the manifest registered in Chrome's
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -25,8 +24,9 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from app.engine.instance_lock import InstanceLock  # noqa: E402
 from app.engine.models import DownloadStatus, DownloadTask  # noqa: E402
-from app.engine.paths import dedupe_path, domain_key, strip_dedupe_suffix  # noqa: E402
+from app.engine.paths import domain_key, safe_filename, strip_dedupe_suffix  # noqa: E402
 from app.engine.probe import guess_filename_from_url, probe_identity, validate_download_url  # noqa: E402
+from app.engine.queueing import find_completed, queue_download  # noqa: E402
 from app.engine.settings import Settings  # noqa: E402
 from app.engine.storage import Storage  # noqa: E402
 
@@ -63,6 +63,10 @@ def send_message(payload: dict) -> None:
 
 
 def _find_app_bundle() -> str | None:
+    if getattr(sys, "frozen", False):
+        # The copy bundled in FlowDownload.app (Contents/MacOS/flowdownload-host):
+        # launch the app it ships in, not whichever one happens to be installed.
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(sys.executable))))
     return next((p for p in APP_BUNDLE_CANDIDATES if os.path.isdir(p)), None)
 
 
@@ -139,10 +143,14 @@ def _find_refresh_target(storage: Storage, url: str, filename: str,
 
     Candidates: failed or paused downloads on the same site, with partial
     data on disk, under a different URL. The first unique match wins:
-      1. same filename (ignoring a " (n)" suffix dedupe_path added), else
-      2. same ETag, else same size, per a quick probe of the new link --
-         re-signed CDN links often change the path, and so the filename
-         guessed from it, while serving the identical file.
+      1. same filename (ignoring a " (n)" suffix dedupe_path added), unless
+         a quick probe of the new link shows a different size -- sites
+         reuse generic names (video.mp4, download), and a name alone used
+         to hand an unrelated file's link to an old download, which then
+         never showed up as its own, else
+      2. same ETag, else same size, per that probe -- re-signed CDN links
+         often change the path, and so the filename guessed from it, while
+         serving the identical file.
     Anything ambiguous returns None, and the link is queued as a new download.
     """
     site = domain_key(url)
@@ -153,11 +161,15 @@ def _find_refresh_target(storage: Storage, url: str, filename: str,
     ]
     if not candidates:
         return None  # the common case: no network probe at all
-    by_name = [t for t in candidates if strip_dedupe_suffix(t.filename) == filename]
-    if len(by_name) == 1:
-        return by_name[0]
     headers = {k: v for k, v in (("Cookie", cookie), ("Referer", referrer)) if v}
     identity = probe_identity(url, headers)
+    by_name = [t for t in candidates if strip_dedupe_suffix(t.filename) == filename]
+    if len(by_name) == 1:
+        # Size, not ETag: CDN edge nodes often give the same file different
+        # ETags, which is exactly the re-signed-link case this exists for.
+        new_size = identity[1] if identity else 0
+        if not (new_size and by_name[0].total_bytes and new_size != by_name[0].total_bytes):
+            return by_name[0]
     if identity is None:
         return None
     etag, size = identity
@@ -197,9 +209,9 @@ def handle_message(message: dict) -> dict:
     os.makedirs(APP_DATA_DIR, exist_ok=True)
     settings = Settings.load(SETTINGS_PATH)
 
-    # basename() strips any directory components, so a crafted filename
-    # can't escape settings.download_dir via the joined path.
-    filename = os.path.basename(message.get("filename") or "") or guess_filename_from_url(url)
+    # safe_filename() strips directory components (and "."/".."), so a
+    # crafted filename can't escape settings.download_dir via the joined path.
+    filename = safe_filename(message.get("filename") or "", fallback=safe_filename(guess_filename_from_url(url)))
 
     storage = Storage(DB_PATH)
     # Dedupe check: if the URL is already represented by a completed task,
@@ -207,18 +219,15 @@ def handle_message(message: dict) -> dict:
     # instead of silently queueing a duplicate. What happens next depends on
     # settings.duplicate_policy -- mirrors DownloadManager.add_download so
     # the Chrome hand-off and the in-app "Add download" dialog agree.
-    existing_match = None
+    existing_match = find_completed(storage.load_all(), url)
     duplicate = None
-    for existing in storage.load_all():
-        if existing.status == DownloadStatus.COMPLETED and existing.url == url:
-            existing_match = existing
-            duplicate = {
-                "task_id": existing.id,
-                "dest_path": existing.dest_path,
-                "size": existing.total_bytes,
-                "digest": existing.digest_sha256,
-            }
-            break
+    if existing_match is not None:
+        duplicate = {
+            "task_id": existing_match.id,
+            "dest_path": existing_match.dest_path,
+            "size": existing_match.total_bytes,
+            "digest": existing_match.digest_sha256,
+        }
 
     cookie = message.get("cookie") or ""
     referrer = _safe_referrer(message.get("referrer"))
@@ -236,51 +245,12 @@ def handle_message(message: dict) -> dict:
         launch_app_if_needed()
         return {"ok": True, "filename": existing_match.filename, "duplicate": duplicate}
 
-    # Auto-folder rule (matches the engine's apply_auto_folder):
-    # when the user has opted in, route by extension into a subfolder
-    # so videos land in <Downloads>/Video, archives in /Archives, etc.
-    # apply_auto_folder_for_path returns the full path, filename included.
-    if getattr(settings, "auto_folder_by_type", False):
-        from app.engine.manager import apply_auto_folder_for_path
-        dest_path = apply_auto_folder_for_path(filename, settings.download_dir)
-    else:
-        dest_path = os.path.join(settings.download_dir, filename)
-
-    # Tasks already queued (here or in the running app) that haven't written
-    # a byte yet have no .part file for dedupe_path's filesystem check to
-    # see -- without this, two downloads handed off in quick succession with
-    # the same suggested filename would collide and corrupt each other.
-    reserved = {t.dest_path for t in storage.load_all()}
-
-    overwrite = existing_match is not None and policy == "overwrite"
-    if overwrite:
-        # The old file stays until the new download completes -- the worker
-        # swaps it in atomically at the end (see DownloadManager.add_download).
-        storage.delete(existing_match.id)
-        reserved.discard(existing_match.dest_path)
-        dest_path = existing_match.dest_path
-    # "rename" (default) falls through unchanged -- dedupe_path below already
-    # picks a fresh filename on any collision.
-
-    if not overwrite:
-        dest_path = dedupe_path(dest_path, reserved)
-    task = DownloadTask(
-        url=url, dest_path=dest_path, filename=os.path.basename(dest_path),
-        status=DownloadStatus.QUEUED, cookie_header=cookie, referrer=referrer,
-    )
-    # This process's reserved-set snapshot and the running app's aren't
-    # coordinated -- storage's UNIQUE index on dest_path turns a same-instant
-    # collision into an IntegrityError instead of two tasks sharing a file.
-    # See the matching retry in DownloadManager.add_download.
-    for _ in range(20):
-        try:
-            storage.save(task)
-            break
-        except sqlite3.IntegrityError:
-            reserved.add(task.dest_path)
-            task.dest_path = dedupe_path(dest_path, reserved)
-            task.filename = os.path.basename(task.dest_path)
-    else:
+    # Same path rules (auto-folder, dedupe, cross-process collision retry)
+    # as the in-app "Add download" dialog -- both go through queue_download.
+    replace = existing_match if policy == "overwrite" else None
+    try:
+        task = queue_download(storage, settings, url, filename, cookie=cookie, referrer=referrer, replace=replace)
+    except RuntimeError:
         return {"ok": False, "error": "could not find a free filename"}
 
     launch_app_if_needed()

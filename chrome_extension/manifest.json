@@ -5,6 +5,7 @@
   "description": "Send downloads to FlowDownload for reliable, resumable downloading.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqcXWnOt25WkBeMeCgnO45nwJ/rPdrsHNAKByHcHI4hh6DjLhHbLWI3iXFsaBjPQO8+T02zAWSty1pnsRtgz3Wvp1Drjz7bbcnMjIdHwYUo4hf4fO5/DifKptU+C9k2Ww2WYxE61uX0LA9Oi23cwjL1NtVJZcP1ST1J7qIRWMVWtNOzZEbWzyPSgU7TxTicG/Iu6mOBQX6EdHd796rTkRi9MA8jzUm8APtMa14CYird8PRcvv3BEgO0y+UZ/UkaUOhlmvbMe30nY75ZCg/VFs7O8s18xXsed5XgvOuMcWUM0eIFdH+GrI49eGGJenwAQNe4MPiNP32Faap9C5IZIymwIDAQAB",
   "permissions": [
+    "alarms",
     "contextMenus",
     "nativeMessaging",
     "notifications",

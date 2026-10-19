@@ -14,7 +14,11 @@ from app.api.schemas import DownloadOut
 from app.api.server import create_app
 from app.engine.manager import DownloadManager
 
-API_PORT = 8756
+# 0 = let the OS pick a free port. Nothing outside this process needs a
+# fixed one (the Chrome extension goes through the native host and the DB),
+# and a fixed port let a second logged-in macOS user's window load the
+# *first* user's server instead of failing.
+API_PORT = 0
 APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".flowdownload")
 
 
@@ -35,24 +39,16 @@ class ApiServer:
 
     def __init__(self, manager: DownloadManager, settings_path: str,
                  port: int = API_PORT, app_data_dir: str = APP_DATA_DIR):
-        # port/app_data_dir are overridable so tests can run a second server
-        # beside a running app without fighting it for 8756 or ~/.flowdownload.
+        # app_data_dir is overridable so tests can run a second server
+        # beside a running app without sharing ~/.flowdownload.
         self.manager = manager
         self.token = secrets.token_urlsafe(32)
         self.port = port
         self.executor = MainThreadExecutor()
-        # Optional callback registered by the UI (WebMainWindow) to open a
-        # completed file in the native OS media player. Lives on the Qt main
-        # thread -- the API endpoint routes through self.executor.call() so
-        # invocations land there.
-        self._native_player_opener = None
 
         self._loop = asyncio.new_event_loop()
         self.broadcaster = EventBroadcaster(self._loop)
-        app = create_app(
-            manager, self.executor, self.broadcaster, settings_path, self.token, app_data_dir,
-            get_native_player_opener=lambda: self._native_player_opener,
-        )
+        app = create_app(manager, self.executor, self.broadcaster, settings_path, self.token, app_data_dir)
         config = uvicorn.Config(app, host="127.0.0.1", port=self.port, loop="none", log_level="warning")
         self._server = uvicorn.Server(config)
 
@@ -74,16 +70,13 @@ class ApiServer:
         deadline = time.monotonic() + 5
         while not self._server.started and time.monotonic() < deadline:
             time.sleep(0.005)
+        if self.port == 0 and self._server.started:
+            self.port = self._server.servers[0].sockets[0].getsockname()[1]
 
-    def set_native_player_opener(self, opener) -> None:
-        """Register a callback that opens a completed file in the native player.
-
-        The callback must be safe to invoke on the Qt main thread (it is
-        routed through the executor). WebMainWindow registers its own
-        _open_native_player method here so the API endpoint can hand off
-        playback without needing a custom URL scheme.
-        """
-        self._native_player_opener = opener
+    @property
+    def page_url(self) -> str:
+        """The UI's URL. It carries the token, so hand it only to our own window."""
+        return f"http://127.0.0.1:{self.port}/?token={self.token}"
 
     def stop(self) -> None:
         self._loop.call_soon_threadsafe(setattr, self._server, "should_exit", True)

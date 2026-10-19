@@ -98,8 +98,7 @@ def _probe(worker) -> tuple[int, str, str] | None:
     headers = worker._base_headers()
     headers["Range"] = "bytes=0-"
     try:
-        response = worker._session.get(worker.url, headers=headers, stream=True,
-                                       timeout=(dl.CONNECT_TIMEOUT, dl.READ_TIMEOUT))
+        response = worker._get(headers)
     except requests.exceptions.RequestException:
         return None  # let the single-stream path deal with (and retry) it
     try:
@@ -151,9 +150,11 @@ def run_segmented(worker) -> bool:
 
     worker.etag, worker.last_modified, worker._total_bytes = etag, last_modified, total
     worker._server_digest_sha256 = None  # a ranged response's Digest can't describe the whole file
-    worker.metadata_resolved.emit(worker.task_id, total, etag, last_modified)
+    worker.metadata_resolved.emit(worker.task_id, total, etag, last_modified, True)  # the probe got a 206
     unfinished = [s for s in segments if s.remaining > 0]
-    threads = max(1, min(worker.max_connections, len(unfinished)))
+    # Every granted connection, even if fewer pieces are left (e.g. resuming
+    # with one unfinished): idle connections split the remaining work.
+    threads = max(1, worker.max_connections) if unfinished else 1
     worker.connections_resolved.emit(worker.task_id, threads)
 
     outcome = _Run(worker, segments, total, etag, last_modified, sidecar).run(threads) if unfinished else "done"
@@ -211,15 +212,35 @@ class _Run:
         for segment in segments:
             if segment.remaining > 0:
                 self.todo.put(segment)
+        # Guards splitting a segment (shrinking its end) against its owner
+        # thread reserving bytes from it, and the segments list itself.
+        self.lock = threading.Lock()
 
     def stopped(self) -> bool:
         return self.abort.is_set() or self.w._pause_event.is_set()
 
     def downloaded(self) -> int:
-        return sum(s.done for s in self.segments)
+        with self.lock:
+            return sum(s.done for s in self.segments)
 
     def save(self) -> None:
-        _save(self.sidecar, self.total, self.etag, self.last_modified, self.segments)
+        with self.lock:
+            segments = [_Segment(s.start, s.end, s.done) for s in self.segments]
+        _save(self.sidecar, self.total, self.etag, self.last_modified, segments)
+
+    def _steal(self) -> _Segment | None:
+        """Split the unfinished segment with the most left and take its back
+        half, so a connection that ran out of queued work helps the slowest
+        piece instead of exiting and leaving it to finish alone."""
+        with self.lock:
+            victim = max(self.segments, key=lambda seg: seg.remaining)
+            if victim.remaining < 2 * MIN_PART:
+                return None  # not worth a new connection
+            middle = victim.start + victim.done + victim.remaining // 2
+            tail = _Segment(middle, victim.end)
+            victim.end = middle - 1  # its owner stops here (it re-reads end per chunk)
+            self.segments.append(tail)
+            return tail
 
     def run(self, thread_count: int) -> str:
         self.fd = os.open(self.w.part_path, os.O_WRONLY)
@@ -280,7 +301,9 @@ class _Run:
             try:
                 segment = self.todo.get_nowait()
             except queue.Empty:
-                return
+                segment = self._steal()
+                if segment is None:
+                    return
             self._fetch(segment)
 
     def _fail(self, message: str) -> None:
@@ -298,22 +321,36 @@ class _Run:
             headers["Range"] = f"bytes={seg.start + seg.done}-{seg.end}"
             headers["If-Range"] = self.validator
             try:
-                response = self.w._session.get(self.w.url, headers=headers, stream=True,
-                                               timeout=(dl.CONNECT_TIMEOUT, dl.READ_TIMEOUT))
+                response = self.w._get(headers)
                 try:
                     if response.status_code == 200:
                         raise _Changed()
                     if response.status_code != 206:
                         response.raise_for_status()
                         raise requests.exceptions.RequestException(f"Unexpected status {response.status_code}")
+                    # Chunks are pwrite()n at the offset we asked for, so a
+                    # server answering from anywhere else would scramble the
+                    # file. Treat it like a changed file: start over as a
+                    # single stream, which doesn't depend on ranges.
+                    start = dl.DownloadWorker._parse_range_start(response.headers.get("Content-Range", ""))
+                    if start != seg.start + seg.done:
+                        raise _Changed()
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                         if self.stopped():
                             return
                         if not chunk:
                             continue
-                        chunk = chunk[:seg.remaining]  # never write past this segment
-                        os.pwrite(self.fd, chunk, seg.start + seg.done)
-                        seg.done += len(chunk)
+                        with self.lock:  # reserve, so a concurrent split sees the bytes as taken
+                            chunk = chunk[:max(0, seg.remaining)]  # never write past this segment
+                            offset = seg.start + seg.done
+                            seg.done += len(chunk)
+                        if chunk:
+                            try:
+                                os.pwrite(self.fd, chunk, offset)
+                            except OSError:
+                                with self.lock:  # never let the sidecar count unwritten bytes
+                                    seg.done -= len(chunk)
+                                raise
                         got += len(chunk)
                         if seg.remaining <= 0:
                             break

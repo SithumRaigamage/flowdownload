@@ -6,9 +6,9 @@ import os
 import time
 
 from app.engine import manager as manager_mod
-from app.engine.paths import domain_key, strip_dedupe_suffix
 from app.engine.models import DownloadStatus as S
 from app.engine.models import DownloadTask
+from app.engine.paths import domain_key, strip_dedupe_suffix
 from tests.conftest import DATA
 
 SLOW = "delay=0.05"  # ~0.6 s per file: slow enough to pause/cancel mid-download
@@ -199,3 +199,83 @@ def test_progress_db_writes_are_throttled(make_manager, server, wait, monkeypatc
     assert len(saves) < progress_ticks
     assert mgr.storage.load_all()[0].downloaded_bytes == len(DATA)
     assert manager_mod.PROGRESS_SAVE_INTERVAL >= 1.0
+
+
+def test_compressing_server_still_yields_the_exact_file(make_manager, server, wait):
+    # Content-Length and byte ranges count the encoded body; asking for
+    # gzip would hand us decoded bytes that never match either.
+    mgr = make_manager(connections_per_download=1)
+    task = mgr.tasks[mgr.add_download(f"{server}/f?gzip=1&delay=0", "f.bin")]
+    assert wait(lambda: task.status in (S.COMPLETED, S.FAILED))
+    assert task.status == S.COMPLETED, task.error_message
+    assert open(task.dest_path, "rb").read() == DATA
+
+
+def test_removing_a_running_download_does_not_block(make_manager, server, wait):
+    # remove() runs on the Qt main thread; waiting there for a worker stuck
+    # in a slow read froze the UI (and every API call) for seconds per row.
+    mgr = make_manager(connections_per_download=1)
+    task = mgr.tasks[mgr.add_download(f"{server}/f?delay=3", "f.bin")]
+    assert wait(lambda: os.path.exists(task.part_path) and task.downloaded_bytes > 0)
+    started = time.monotonic()
+    mgr.remove(task.id)
+    assert time.monotonic() - started < 0.5
+    assert task.id not in mgr.tasks and not mgr.storage.load_all()
+    assert wait(lambda: not os.path.exists(task.part_path))  # cleaned up once the worker exits
+
+
+def test_completed_downloads_drop_their_cookies(make_manager, server, wait):
+    mgr = make_manager()
+    task = DownloadTask(url=f"{server}/f?delay=0", dest_path=os.path.join(mgr.settings.download_dir, "c.bin"),
+                        filename="c.bin", cookie_header="sid=secret")
+    mgr.storage.save(task)  # as the Chrome native host queues it
+    mgr._poll_external_changes()
+    task = mgr.tasks[task.id]
+    assert wait(lambda: task.status == S.COMPLETED)
+    assert task.cookie_header == ""
+    assert mgr.storage.load_all()[0].cookie_header == ""
+
+
+def test_filenames_cannot_name_the_folder_or_its_parent(make_manager):
+    from app.engine.paths import safe_filename
+
+    assert safe_filename("..") == "download"
+    assert safe_filename(".") == "download"
+    assert safe_filename("../../x/.bashrc") == "bashrc"
+    assert safe_filename("a\x00b\nc.txt") == "abc.txt"
+    mgr = make_manager()
+    task = mgr.tasks[mgr.add_download("http://127.0.0.1:1/x", "..")]
+    assert os.path.dirname(task.dest_path) == mgr.settings.download_dir
+    assert task.filename == "download"
+
+
+def test_resumable_means_the_server_supports_ranges(make_manager, server, wait):
+    from app.api.schemas import DownloadOut
+
+    mgr = make_manager(connections_per_download=1)
+    yes = mgr.tasks[mgr.add_download(f"{server}/r?delay=0", "r.bin")]
+    no = mgr.tasks[mgr.add_download(f"{server}/n?delay=0&noranges=1", "n.bin")]  # ETag, but no ranges
+    assert wait(lambda: yes.status == S.COMPLETED and no.status == S.COMPLETED)
+    assert DownloadOut.from_task(yes).accept_ranges is True
+    assert DownloadOut.from_task(no).accept_ranges is False
+    assert {t.id: t.accept_ranges for t in mgr.storage.load_all()} == {yes.id: True, no.id: False}
+
+
+def test_browser_cookies_survive_redirects_but_server_cookies_stay_per_task(make_manager, server, wait):
+    from tests.conftest import REQUESTS
+
+    REQUESTS.clear()
+    mgr = make_manager(connections_per_download=1)
+    first = DownloadTask(url=f"{server}/start?redirect=/landed%3Fsetcookie%3D1%26delay%3D0",
+                         dest_path=os.path.join(mgr.settings.download_dir, "a.bin"), filename="a.bin",
+                         cookie_header="sid=abc")
+    mgr.storage.save(first)
+    mgr._poll_external_changes()
+    assert wait(lambda: mgr.tasks[first.id].status == S.COMPLETED)
+    landed = [h for p, h in REQUESTS if p.startswith("/landed")]
+    assert landed and "sid=abc" in landed[0].get("Cookie", "")  # kept across the redirect
+
+    second = mgr.tasks[mgr.add_download(f"{server}/other?delay=0", "b.bin")]
+    assert wait(lambda: second.status == S.COMPLETED)
+    other = [h for p, h in REQUESTS if p.startswith("/other")]
+    assert other and "leak" not in other[0].get("Cookie", "")  # first task's server cookie

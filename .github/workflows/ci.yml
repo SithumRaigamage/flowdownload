@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The app is macOS-only (osascript, open, Homebrew paths, .app bundle).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4  # runs the extension's background.js in tests/chrome_harness.js
+        with:
+          node-version: "24"
+      - name: Install pinned dependencies
+        run: pip install -r requirements.lock
+      - name: Lint
+        run: ruff check .
+      - name: Tests (engine, API, native host, extension, offscreen UI)
+        run: python -m pytest
+      - name: Audit dependencies for known vulnerabilities
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.lock

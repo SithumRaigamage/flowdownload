@@ -44,6 +44,9 @@ class DownloadTask:
     # Page the download was started from, sent as the Referer header. Many
     # CDNs refuse (or throttle) requests that arrive without one.
     referrer: str = ""
+    # Whether the server has shown it honours byte ranges (a 206, or
+    # Accept-Ranges: bytes). Resuming also needs etag/last_modified.
+    accept_ranges: bool = False
     # Connections currently in use (in memory only, never persisted): counts
     # against the per-site connection budget while the task is active.
     connections: int = 0
@@ -81,16 +84,17 @@ class DownloadTask:
             self.digest_sha256,
             self.digest_verified,
             self.referrer,
+            self.accept_ranges,
             self.created_at,
             self.updated_at,
         )
 
     @classmethod
-    def from_row(cls, row: tuple) -> "DownloadTask":
+    def from_row(cls, row: tuple) -> DownloadTask:
         (
             id_, url, dest_path, filename, total_bytes, downloaded_bytes,
             status, error_message, etag, last_modified, cookie_header,
-            digest_sha256, digest_verified, referrer, created_at, updated_at,
+            digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at,
         ) = row
         return cls(
             id=id_,
@@ -107,6 +111,7 @@ class DownloadTask:
             digest_sha256=digest_sha256 or "",
             digest_verified=bool(digest_verified),
             referrer=referrer or "",
+            accept_ranges=bool(accept_ranges),
             created_at=created_at,
             updated_at=updated_at,
         )

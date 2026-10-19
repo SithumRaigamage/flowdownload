@@ -2,40 +2,44 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import mimetypes
 import os
+import secrets
 import shutil
 import subprocess
-import time
 from pathlib import Path
-from typing import Callable, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Cookie, Request
-from fastapi.responses import HTMLResponse, FileResponse
-import mimetypes
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from app.api.events import EventBroadcaster
-from app.api.main_thread import MainThreadExecutor
+from app.api.events import OVERFLOW, EventBroadcaster
+from app.api.main_thread import MainThreadBusy, MainThreadExecutor
 from app.api.schemas import (
-    ChromeStatus, DedupeCheckRequest, DedupeCheckResponse, DiskInfo, DownloadOut,
-    HistoryEntry, NewDownloadRequest, PickFolderResponse, ProbeResponse, RefreshUrlRequest,
-    SettingsOut, SettingsPatch,
+    ChromeStatus,
+    DedupeCheckRequest,
+    DedupeCheckResponse,
+    DiskInfo,
+    DownloadOut,
+    HistoryEntry,
+    NewDownloadRequest,
+    PickFolderResponse,
+    ProbeResponse,
+    RefreshUrlRequest,
+    SettingsOut,
+    SettingsPatch,
 )
-from app.engine.manager import DownloadManager, prune_empty_auto_folder_dir
+from app.engine.manager import DownloadManager
 from app.engine.models import DownloadStatus
+from app.engine.paths import prune_empty_auto_folder_dir
 from app.engine.probe import guess_filename_from_url, probe_remote_filename
 from app.engine.settings import Settings
+from app.media import transcode
 from app.version import APP_VERSION
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 NATIVE_HOST_MANIFEST = Path.home() / (
     "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
 )
-
-
-def _log(msg: str) -> None:
-    """Unbuffered stderr logger (uvicorn captures stdout by default)."""
-    import sys
-    print(msg, file=sys.stderr, flush=True)
 
 
 def _sniff_media_type(path: str) -> str | None:
@@ -92,223 +96,6 @@ def _sniff_media_type(path: str) -> str | None:
     return mimetypes.guess_type(path)[0]
 
 
-def _needs_transcode(path: str) -> bool:
-    """Probe a file's codecs to decide if FFmpeg transcoding is required.
-
-    Qt WebEngine ships with the open-source Chromium FFmpeg build, which
-    deliberately omits proprietary codecs (H.264, AAC, MPEG-2, ...). For
-    those files, an in-page <video> element fires DEMUXER_ERROR_NO_SUPPORTED_STREAMS
-    and shows a black frame. We use FFprobe to inspect the streams and
-    return True if any of them use a codec the open-source Chromium build
-    cannot decode. WebM/VP9/VP8/Opus/Vorbis files are returned untouched
-    (no CPU cost) so they play directly.
-    """
-    # A conservative whitelist of codecs supported by the open-source
-    # Chromium FFmpeg that ships with Qt WebEngine. Anything not in this
-    # set needs transcoding to VP9/Opus.
-    SUPPORTED_VIDEO = {"vp8", "vp9", "av1"}
-    SUPPORTED_AUDIO = {"opus", "vorbis", "pcm_*", "flac"}
-    try:
-        out = subprocess.run(
-            [_find_binary("ffprobe"), "-v", "error", "-print_format", "json",
-             "-show_streams", path],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        if out.returncode != 0:
-            return True  # can't probe — assume worst case
-        import json as _json
-        info = _json.loads(out.stdout or "{}")
-        for s in info.get("streams", []):
-            codec = (s.get("codec_name") or "").lower()
-            kind = s.get("codec_type")
-            if kind == "video" and codec not in SUPPORTED_VIDEO:
-                return True
-            if kind == "audio" and not any(
-                codec == p.rstrip("*") or codec.startswith(p.rstrip("*"))
-                for p in SUPPORTED_AUDIO
-            ):
-                return True
-        return False
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return True  # ffprobe missing or hung — transcode to be safe
-
-
-def _find_binary(name: str) -> str:
-    """Return the path to an executable, searching well-known macOS Homebrew
-    locations before falling back to a bare name (using PATH from the
-    current environment).
-
-    macOS GUI apps launched from Finder/Dock run under launchd with a
-    minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that excludes Homebrew's
-    /opt/homebrew/bin. This helper makes the dist .app bundle find
-    ffmpeg/ffprobe regardless of how it was launched.
-    """
-    candidates = [
-        f"/opt/homebrew/bin/{name}",      # Apple Silicon Homebrew
-        f"/usr/local/bin/{name}",         # Intel Homebrew / older installs
-        f"/opt/local/bin/{name}",         # MacPorts
-    ]
-    for path in candidates:
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            return path
-    return name  # fallback: let subprocess find it via PATH
-
-
-def _transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> bool:
-    """Transcode src_path (H.264/AAC) → dest_path (VP9/Opus WebM) using FFmpeg.
-
-    Returns True on success, False on failure. Runs synchronously — the
-    caller is expected to invoke this on a background thread so HTTP
-    requests stay responsive while FFmpeg does its work.
-
-    Why we transcode to a file (not stream stdout):
-      WebM is a seekable container. The `<video>` element reads the
-      total duration from the WebM header at the start of the file; an
-      on-the-fly stdout stream has no fixed duration, so the browser
-      shows 0:00 / 0:00 and the seek bar can't render properly. By
-      writing to a file first, the duration is known and the browser
-      gets full seek/Range support via FastAPI's FileResponse.
-    """
-    cmd = [
-        _find_binary("ffmpeg"),
-        "-hide_banner", "-loglevel", "error",
-        "-y",  # overwrite existing file
-        "-i", src_path,
-        # Video: VP9 in WebM. `cpu-used 8` is realtime-fast; quality is
-        # acceptable for in-app preview.
-        "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32",
-        "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1",
-        # Audio: Opus at 96k is plenty for spoken-word video and light music.
-        "-c:a", "libopus", "-b:a", "96k",
-        # WebM container.
-        "-f", "webm",
-        dest_path,
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=int(duration_s) + 60)
-        if result.returncode != 0:
-            _log(f"[transcode] ffmpeg failed: {result.stderr.decode(errors='replace')[-500:]}")
-            return False
-        return os.path.exists(dest_path) and os.path.getsize(dest_path) > 0
-    except subprocess.TimeoutExpired:
-        _log(f"[transcode] ffmpeg timed out for {os.path.basename(src_path)}")
-        return False
-    except Exception as exc:
-        _log(f"[transcode] error: {exc}")
-        return False
-
-
-def _probe_duration(path: str) -> float:
-    """Return the duration of a media file in seconds, or 0 on error."""
-    try:
-        out = subprocess.run(
-            [_find_binary("ffprobe"), "-v", "error", "-print_format", "json",
-             "-show_format", path],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-        if out.returncode != 0:
-            return 0.0
-        import json as _json
-        info = _json.loads(out.stdout or "{}")
-        return float(info.get("format", {}).get("duration", 0) or 0)
-    except Exception:
-        return 0.0
-
-
-def _transcode_cache_key(src_path: str) -> str:
-    """Build a cache key from the source path and mtime so a re-encoded
-    file is regenerated when the source changes."""
-    st = os.stat(src_path)
-    return f"{os.path.basename(src_path)}.{int(st.st_mtime)}.{st.st_size}.webm"
-
-
-def _remove_transcode_cache(src_path: str, cache_dir: str) -> None:
-    """Delete the cached WebM transcode for a download that's being removed.
-
-    Once the task is gone, nothing will ever look this cache entry up
-    again (lookups only happen via an active task's preview action) --
-    without this, every previewed video/audio file left an orphaned
-    transcode behind forever, with no eviction anywhere in the app. Must
-    run *before* the source file itself is deleted: the cache key is
-    derived from the source's mtime+size, which requires stat'ing a file
-    that still exists.
-    """
-    try:
-        key = _transcode_cache_key(src_path)
-    except OSError:
-        return  # source already gone -- nothing to key the cache entry by
-    cached = os.path.join(cache_dir, key)
-    try:
-        if os.path.exists(cached):
-            os.remove(cached)
-    except OSError:
-        pass
-
-
-def _get_or_build_transcoded(src_path: str, cache_dir: str,
-                              max_wait_s: float = 600.0) -> str | None:
-    """Return the path to a transcoded WebM, building it if needed.
-
-    Caches the result in cache_dir by source-path+mtime+size. Concurrent
-    requests for the same source are coalesced via a per-key lock + a
-    shared "is this source already being transcoded" flag, so we don't
-    run FFmpeg twice for the same file.
-
-    If the cache is empty, this function KICKS OFF the transcode in a
-    background daemon thread and blocks the caller (up to max_wait_s)
-    waiting for the result. Returning a path that doesn't exist yet
-    is intentional: the HTTP handler can show a "transcoding" status
-    to the JS, which will keep polling /transcode-status until the
-    file appears, then load <video src=...> on the same URL.
-    """
-    import threading
-    key = _transcode_cache_key(src_path)
-    dest = os.path.join(cache_dir, key)
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return dest  # cache hit, instant return
-
-    os.makedirs(cache_dir, exist_ok=True)
-    # Module-level state: lock + "already running" flag, keyed by source key.
-    state = _get_or_build_transcoded.__dict__.setdefault("_state", {})
-    entry = state.setdefault(key, {
-        "lock": threading.Lock(),
-        "thread": None,
-        "started": False,
-    })
-
-    # If no thread is running for this key, start one.
-    if not entry["started"]:
-        with entry["lock"]:
-            if not entry["started"]:
-                duration = _probe_duration(src_path)
-                _log(f"[transcode] starting: {os.path.basename(src_path)} → {key} ({duration:.1f}s)")
-                def _run():
-                    try:
-                        ok = _transcode_to_webm(src_path, dest, duration)
-                        if ok:
-                            _log(f"[transcode] done: {key} ({os.path.getsize(dest)} bytes)")
-                        else:
-                            _log(f"[transcode] FAILED: {key}")
-                            try: os.remove(dest)
-                            except OSError: pass
-                    finally:
-                        entry["started"] = False
-                entry["started"] = True
-                entry["thread"] = threading.Thread(target=_run, daemon=True)
-                entry["thread"].start()
-
-    # Block the caller (the HTTP handler) until the transcode is done.
-    # We don't hold the lock here -- multiple HTTP requests for the
-    # same source can all wait on the same background thread.
-    deadline = time.time() + max_wait_s
-    while time.time() < deadline:
-        if os.path.exists(dest) and os.path.getsize(dest) > 0:
-            return dest
-        time.sleep(0.5)
-    _log(f"[transcode] wait timeout for {key}")
-    return None
-
-
 def create_app(
     manager: DownloadManager,
     executor: MainThreadExecutor,
@@ -316,9 +103,20 @@ def create_app(
     settings_path: str,
     token: str,
     app_data_dir: str,
-    get_native_player_opener: "Callable[[], Optional[Callable[[str], None]]] | None" = None,
 ) -> FastAPI:
     app = FastAPI(title="FlowDownload API")
+
+    @app.exception_handler(MainThreadBusy)
+    async def _main_thread_busy(_request: Request, exc: MainThreadBusy):
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+
+    # A quit mid-transcode leaves ffmpeg's <key>.webm.tmp behind; nothing
+    # reads those, so they'd only ever take up disk.
+    for leftover in Path(app_data_dir, "transcoded").glob("*.tmp"):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
 
     @app.middleware("http")
     async def _reject_dns_rebinding(request: Request, call_next):
@@ -338,12 +136,21 @@ def create_app(
             return HTMLResponse("Invalid Host header", status_code=421)
         return await call_next(request)
 
+    def _is_token(value: str | None) -> bool:
+        return value is not None and secrets.compare_digest(value, token)
+
     @app.get("/", response_class=HTMLResponse)
-    def index():
-        # The token is embedded directly in the page rather than fetched
-        # separately -- there's no bootstrap credential to fetch it *with*,
-        # and this endpoint is 127.0.0.1-only, loaded solely by the app's own
-        # QWebEngineView.
+    def index(
+        query_token: str | None = Query(default=None, alias="token"),
+        flowdownload_token: str | None = Cookie(default=None),
+    ):
+        # The page embeds the token, so serving it to anyone who asks would
+        # hand the token to every local process (the Host check above stops
+        # browsers, not curl). Only the app's own window knows the URL with
+        # the token in it (ApiServer.page_url), handed over in-process; the
+        # cookie set below keeps a reload of that page working.
+        if not (_is_token(query_token) or _is_token(flowdownload_token)):
+            return HTMLResponse("Missing or invalid token", status_code=401)
         html = (FRONTEND_DIR / "index.html").read_text()
         html = html.replace("__FLOWDOWNLOAD_TOKEN__", token).replace("__FLOWDOWNLOAD_VERSION__", APP_VERSION)
         response = HTMLResponse(html)
@@ -360,23 +167,31 @@ def create_app(
         )
         return response
 
-    def require_token(
-        authorization: Optional[str] = Header(default=None),
-        flowdownload_token: Optional[str] = Cookie(default=None),
-    ) -> None:
+    def require_token(authorization: str | None = Header(default=None)) -> None:
         # 127.0.0.1-only, but any other local process (or a malicious page,
         # if this were ever opened outside the app's own webview) could
         # otherwise reach it -- the token is regenerated every launch and
-        # only the app itself knows it. Either the Authorization header
-        # (used by JS fetch() calls) or the HttpOnly cookie set on / (used
-        # by the <video>/<audio> element when streaming a file) is accepted.
-        expected = f"Bearer {token}"
-        if authorization == expected or flowdownload_token == token:
+        # only the app itself knows it. JS fetch() calls send it as a
+        # header. The cookie is deliberately NOT accepted here: browsers
+        # attach it automatically, and a page on any other 127.0.0.1 port
+        # counts as same-site, so it could otherwise trigger these actions.
+        bearer = authorization[len("Bearer "):] if authorization and authorization.startswith("Bearer ") else None
+        if _is_token(bearer):
             return
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
+    def require_token_or_cookie(
+        authorization: str | None = Header(default=None),
+        flowdownload_token: str | None = Cookie(default=None),
+    ) -> None:
+        # Only for the read-only media streams: <video>/<audio> elements
+        # can't send headers, so they carry the HttpOnly cookie set on /.
+        if _is_token(flowdownload_token):
+            return
+        require_token(authorization)
+
     @app.get("/api/downloads", response_model=list[DownloadOut])
-    def list_downloads(status: Optional[str] = None, _=Depends(require_token)):
+    def list_downloads(status: str | None = None, _=Depends(require_token)):
         def _read():
             tasks = list(manager.tasks.values())
             if status:
@@ -394,7 +209,7 @@ def create_app(
         try:
             return executor.call(_create)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/probe", response_model=ProbeResponse)
     def probe(url: str, _=Depends(require_token)):
@@ -445,7 +260,7 @@ def create_app(
         try:
             return executor.call(lambda: _act_and_return(lambda tid: manager.refresh_url(tid, body.url), task_id))
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def _act_and_return(fn, task_id: str) -> DownloadOut:
         if task_id not in manager.tasks:
@@ -466,23 +281,8 @@ def create_app(
         subprocess.run(["open", "-R", path], check=False)
         return {"ok": True}
 
-    @app.post("/api/downloads/{task_id}/open-in-player", response_model=dict)
-    def open_in_player(task_id: str, _=Depends(require_token)):
-        """Open a completed download in the native OS media player via the Qt UI."""
-        def _open():
-            opener = get_native_player_opener() if get_native_player_opener else None
-            if opener is None:
-                return None  # No player registered (dev mode without UI maybe)
-            opener(task_id)
-            return {"ok": True, "player": "native"}
-        # The opener runs on the Qt main thread; block briefly for result.
-        result = executor.call(_open)
-        if result is None:
-            raise HTTPException(status_code=503, detail="Native media player not available")
-        return result
-
     @app.get("/api/downloads/{task_id}/stream")
-    def stream_download(task_id: str, _=Depends(require_token)):
+    def stream_download(task_id: str, _=Depends(require_token_or_cookie)):
         """Stream a completed download file for in-app preview.
 
         FileResponse handles HTTP Range requests (seeking in video/audio) natively.
@@ -502,22 +302,20 @@ def create_app(
             raise HTTPException(status_code=404, detail="File not found or not ready")
 
         media_type = _sniff_media_type(dest_path)
-        response = FileResponse(
-            dest_path,
-            media_type=media_type or "application/octet-stream",
-            filename=os.path.basename(dest_path),
-        )
         # FileResponse defaults to "attachment" which some browsers treat as a
         # download even when the URL is set on a <video> element. Force inline
         # so the in-app library player shows the media rather than triggering
-        # a download.
-        response.headers["Content-Disposition"] = (
-            f'inline; filename="{os.path.basename(dest_path)}"'
+        # a download. Let FileResponse build the header: it RFC 5987-encodes
+        # non-ASCII names, which a hand-built latin-1 header can't carry.
+        return FileResponse(
+            dest_path,
+            media_type=media_type or "application/octet-stream",
+            filename=os.path.basename(dest_path),
+            content_disposition_type="inline",
         )
-        return response
 
     @app.api_route("/api/downloads/{task_id}/stream-webm", methods=["GET", "HEAD"])
-    def stream_transcode(task_id: str, request: Request, _=Depends(require_token)):
+    def stream_transcode(task_id: str, request: Request, _=Depends(require_token_or_cookie)):
         """Stream a media file as WebM/VP9/Opus, transcoding on first request.
 
         Qt WebEngine's open-source Chromium FFmpeg build lacks proprietary
@@ -543,7 +341,6 @@ def create_app(
         browser's native <video> controls (including the seek bar) work
         perfectly.
         """
-        from fastapi.responses import JSONResponse
         is_head = request.method == "HEAD"
 
         # Read the file path on the manager thread (same mechanism as /stream)
@@ -560,13 +357,11 @@ def create_app(
 
         # If the file is already in a WebEngine-compatible codec, just
         # stream the original -- no CPU cost, full Range support.
-        if not _needs_transcode(dest_path):
+        if not transcode.probe_media(dest_path)[0]:
             response = FileResponse(
                 dest_path, media_type="video/webm",
                 filename=os.path.basename(dest_path),
-            )
-            response.headers["Content-Disposition"] = (
-                f'inline; filename="{os.path.basename(dest_path)}"'
+                content_disposition_type="inline",
             )
             response.headers["Cache-Control"] = "no-store"
             if is_head:
@@ -578,15 +373,17 @@ def create_app(
         # Needs transcoding. Check the cache.
         cache_dir = os.path.join(app_data_dir, "transcoded")
         os.makedirs(cache_dir, exist_ok=True)
-        key = _transcode_cache_key(dest_path)
+        key = transcode.cache_key(dest_path)
         final = os.path.join(cache_dir, key)
         if os.path.exists(final) and os.path.getsize(final) > 0:
+            try:
+                os.utime(final)  # mark as recently used for transcode.evict_cache
+            except OSError:
+                pass
             response = FileResponse(
                 final, media_type="video/webm",
-                filename=os.path.basename(final),
-            )
-            response.headers["Content-Disposition"] = (
-                f'inline; filename="{os.path.basename(dest_path)}"'
+                filename=os.path.basename(dest_path),
+                content_disposition_type="inline",
             )
             response.headers["Cache-Control"] = "no-store"
             if is_head:
@@ -597,7 +394,7 @@ def create_app(
         # across concurrent requests) and return 202 so the JS knows to
         # poll. The 202 response carries the transcode status URL so the
         # JS doesn't have to construct it.
-        _get_or_build_transcoded(dest_path, cache_dir, max_wait_s=0.1)
+        transcode.get_or_build(dest_path, cache_dir, max_wait_s=0.1)
         body = {
             "state": "transcoding",
             "status_url": f"/api/downloads/{task_id}/transcode-status",
@@ -636,39 +433,43 @@ def create_app(
         /stream-webm just to kick FFmpeg off; it can poll status
         first and switch over to <video src=...> when state="cached".
         """
+        # Only the task lookup runs on the Qt main thread: ffprobe (inside
+        # transcode.probe_media) can take seconds, and this endpoint is polled once a
+        # second -- probing in here froze the whole UI for every poll.
         def _get():
             task = manager.tasks.get(task_id)
             if task is None or task.status != DownloadStatus.COMPLETED:
-                return None, None
-            return task.dest_path, _probe_duration(task.dest_path)
-        result = executor.call(_get)
-        if result == (None, None):
+                return None
+            return task.dest_path
+        dest_path = executor.call(_get)
+        if dest_path is None or not os.path.exists(dest_path):
             raise HTTPException(status_code=404, detail="No such download")
-        dest_path, duration = result
-        if not _needs_transcode(dest_path):
+        needs_transcode, duration = transcode.probe_media(dest_path)
+        if not needs_transcode:
             return {"state": "cached", "needs_transcode": False}
         cache_dir = os.path.join(app_data_dir, "transcoded")
         os.makedirs(cache_dir, exist_ok=True)
-        key = _transcode_cache_key(dest_path)
+        key = transcode.cache_key(dest_path)
         final = os.path.join(cache_dir, key)
         if os.path.exists(final) and os.path.getsize(final) > 0:
             return {"state": "cached", "needs_transcode": True}
-        # Make sure the transcode is running. _get_or_build_transcoded
+        # Make sure the transcode is running. transcode.get_or_build
         # is idempotent: a second call while one is in progress just
         # returns the in-flight thread. Pass max_wait_s=0 to return
         # immediately so this endpoint stays cheap to poll.
-        _get_or_build_transcoded(dest_path, cache_dir, max_wait_s=0)
-        if os.path.exists(final) and duration > 0:
-            final_size = os.path.getsize(final)
+        transcode.get_or_build(dest_path, cache_dir, max_wait_s=0)
+        error = transcode.transcode_error(dest_path)
+        if error is not None:
+            return {"state": "failed", "needs_transcode": True, "error": error}
+        if os.path.exists(final + ".tmp") and duration > 0:
+            final_size = os.path.getsize(final + ".tmp")
             # VP9 at CRF 32 produces roughly 600-800 kbps for typical
             # 480p content; we use 700 kbps as the mid estimate. The
             # output size depends on content complexity, so the
             # percentage is approximate -- but it's monotonic and
-            # gives the user meaningful feedback during the wait.
+            # gives the user meaningful feedback during the wait. It's
+            # capped at 99: only the finished file's rename means "cached".
             estimated_total = int(duration * 700_000 / 8)
-            if final_size >= estimated_total:
-                # FFmpeg finished; the file is ready.
-                return {"state": "cached", "needs_transcode": True}
             # Don't return 0% when FFmpeg is clearly working -- show at
             # least 1% so the progress bar is visibly animating.
             pct = min(99, max(1, int(final_size * 100 / max(estimated_total, 1))))
@@ -691,7 +492,7 @@ def create_app(
             for task_id in ids:
                 task = manager.tasks.get(task_id)
                 if task is not None:
-                    _remove_transcode_cache(task.dest_path, cache_dir)
+                    transcode.remove_cached(task.dest_path, cache_dir)
                 manager.remove(task_id)
             return len(ids)
 
@@ -709,7 +510,7 @@ def create_app(
             task = manager.tasks.get(task_id)
             dest_path = task.dest_path if task is not None else None
             if dest_path:
-                _remove_transcode_cache(dest_path, cache_dir)
+                transcode.remove_cached(dest_path, cache_dir)
             manager.remove(task_id)
             return dest_path
 
@@ -794,7 +595,7 @@ def create_app(
 
     @app.websocket("/api/events")
     async def events(websocket: WebSocket):
-        if websocket.query_params.get("token") != token:
+        if not _is_token(websocket.query_params.get("token")):
             await websocket.close(code=4401)
             return
         await websocket.accept()
@@ -802,6 +603,11 @@ def create_app(
         try:
             while True:
                 message = await queue.get()
+                if message is OVERFLOW:
+                    # Fell too far behind to catch up event by event; the UI
+                    # reconnects and re-reads the whole list instead.
+                    await websocket.close(code=1013)
+                    break
                 await websocket.send_json(message)
         except WebSocketDisconnect:
             pass

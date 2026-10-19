@@ -69,6 +69,49 @@ def test_extension_reroutes_chrome_downloads():
     assert sent["msg"]["profile_id"]
 
 
+def test_chrome_keeps_the_download_until_the_host_accepts_it():
+    out = run_extension({"download": {"id": 7, "url": "https://cdn.example.com/a.mp4"}})
+    assert out["paused"] == [7] and out["resumed"] == []
+
+
+@pytest.mark.parametrize("host", ["unreachable", "error"])
+def test_failed_hand_off_resumes_the_chrome_download(host):
+    # Erasing Chrome's copy before the host confirmed meant a broken
+    # hand-off lost the download from both places.
+    out = run_extension({"host": host}, {"download": {"id": 7, "url": "https://cdn.example.com/a.mp4"}})
+    assert out["paused"] == [7] and out["resumed"] == [7]
+    assert out["cancelled"] == [] and out["erased"] == []
+    assert out["notifications"] == ["FlowDownload error"]
+
+
+def test_interception_can_be_switched_off():
+    out = run_extension(
+        {"storage": {"flowdownload_intercept": {"enabled": False}}},
+        {"download": {"id": 7, "url": "https://cdn.example.com/a.mp4"}},
+        {"menu": {"linkUrl": "https://cdn.example.com/b.zip"}},  # explicit request: still sent
+    )
+    assert out["paused"] == [] and out["cancelled"] == []
+    assert [s["msg"]["url"] for s in out["native"]] == ["https://cdn.example.com/b.zip"]
+
+
+def test_excluded_sites_stay_in_chrome():
+    excluded = {"flowdownload_intercept": {"enabled": True, "excluded": ["example.com", "https://www.other.test/page"]}}
+    out = run_extension(
+        {"storage": excluded},
+        {"download": {"id": 1, "url": "https://example.com/a.zip"}},
+        {"download": {"id": 2, "url": "https://cdn.example.com/b.zip"}},
+        {"download": {"id": 3, "url": "https://other.test/c.zip"}},
+        {"download": {"id": 4, "url": "https://notexample.com/d.zip"}},  # not a subdomain
+    )
+    assert out["paused"] == [4]
+    assert [s["msg"]["url"] for s in out["native"]] == ["https://notexample.com/d.zip"]
+
+
+def test_heartbeat_uses_an_alarm():
+    # setInterval dies when Chrome suspends the idle service worker.
+    assert run_extension()["alarms"] == [{"name": "flowdownload-ping", "periodInMinutes": 0.5}]
+
+
 def test_download_reaches_the_database(home):
     (sent,) = run_extension({"download": {"id": 1, "url": "https://cdn.example.com/dir/movie.mp4"}})["native"]
     response = call_host(home, sent["msg"])

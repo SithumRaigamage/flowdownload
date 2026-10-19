@@ -32,6 +32,9 @@ datas = [
     (str(ROOT / "app" / "AppIcon.icns"), "Resources"),
     # Read at runtime by app/version.py so the UI can show the build version.
     (str(ROOT / "VERSION"), "."),
+    # The Chrome extension, so "Load unpacked" can point inside the app
+    # instead of at a source checkout (see scripts/setup_chrome_integration.py).
+    (str(ROOT / "chrome_extension"), "chrome_extension"),
 ]
 
 # PySide6 ships a handful of optional plugins/QML modules; asking for the full
@@ -74,6 +77,40 @@ exe = EXE(
     entitlements_file=None,
 )
 
+# The Chrome native messaging host, as a second executable in the same
+# bundle (Contents/MacOS/flowdownload-host). Without it, the Chrome
+# integration ran native_host/flowdownload_host.py out of the source
+# checkout with its venv's Python, so it broke as soon as the repo or venv
+# moved. It never imports Qt (see app/engine/queueing.py), so PySide6 is
+# excluded to keep it starting fast on every hand-off.
+host_a = Analysis(
+    ["native_host/flowdownload_host.py"],
+    pathex=[str(ROOT)],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["PySide6", "shiboken6", "fastapi", "uvicorn", "starlette", "pydantic"],
+    noarchive=False,
+)
+host_pyz = PYZ(host_a.pure, host_a.zipped_data, cipher=block_cipher)
+host_exe = EXE(
+    host_pyz,
+    host_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="flowdownload-host",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,  # Chrome talks to it over stdin/stdout
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
 # Bundle the binary + dependencies into FlowDownload.app. macOS treats any
 # directory ending in `.app` as a clickable application and gives it a Dock
 # icon.
@@ -82,6 +119,10 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
+    host_exe,
+    host_a.binaries,
+    host_a.zipfiles,
+    host_a.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

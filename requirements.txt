@@ -1,5 +1,7 @@
 PySide6>=6.11
 requests>=2.34
+urllib3>=2.8  # 2.7 has PYSEC-2026-4175..4177; every download goes through it
 fastapi>=0.115
+pydantic>=2.13
 uvicorn>=0.32
 websockets>=13
