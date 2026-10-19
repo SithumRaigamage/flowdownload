@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 import time
@@ -406,9 +407,10 @@ class DownloadManager(QObject):
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
 
-    def _site_limit(self) -> int:
-        """Per-site connection budget; guards against a hand-edited settings.json."""
-        return max(1, int(self.settings.max_connections_per_site))
+    def _site_limit(self) -> float:
+        """Per-site connection budget, or infinity when the limit is off (0)."""
+        limit = int(self.settings.site_connection_limit)
+        return limit if limit > 0 else math.inf
 
     def _connections_used(self, domain: str, exclude: str | None = None) -> int:
         """Connections active downloads hold on this site's budget."""

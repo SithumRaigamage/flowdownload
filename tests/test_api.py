@@ -26,4 +26,15 @@ def test_version_matches_version_file():
 
 
 def test_settings_out_exposes_per_site_limit():
-    assert SettingsOut.from_settings(Settings(max_connections_per_site=25)).max_connections_per_site == 25
+    assert SettingsOut.from_settings(Settings()).site_connection_limit == 0
+    assert SettingsOut.from_settings(Settings(site_connection_limit=25)).site_connection_limit == 25
+
+
+def test_old_saved_per_site_limit_is_dropped(tmp_path):
+    # 1.1.8/1.1.9 saved max_connections_per_site=10 by default; it must not
+    # keep capping downloads after the setting became opt-in.
+    path = tmp_path / "settings.json"
+    path.write_text('{"max_concurrent_downloads": 30, "max_connections_per_site": 10}')
+    settings = Settings.load(str(path))
+    assert settings.max_concurrent_downloads == 30
+    assert settings.site_connection_limit == 0

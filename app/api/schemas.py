@@ -101,7 +101,7 @@ class SettingsOut(BaseModel):
     auto_folder_by_type: bool
     duplicate_policy: Literal["rename", "skip", "overwrite"]
     connections_per_download: int
-    max_connections_per_site: int
+    site_connection_limit: int
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SettingsOut":
@@ -113,7 +113,7 @@ class SettingsOut(BaseModel):
             auto_folder_by_type=settings.auto_folder_by_type,
             duplicate_policy=settings.duplicate_policy,
             connections_per_download=settings.connections_per_download,
-            max_connections_per_site=settings.max_connections_per_site,
+            site_connection_limit=settings.site_connection_limit,
         )
 
 
@@ -125,7 +125,7 @@ class SettingsPatch(BaseModel):
     auto_folder_by_type: bool | None = None
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
-    max_connections_per_site: int | None = Field(default=None, ge=1, le=50)
+    site_connection_limit: int | None = Field(default=None, ge=0, le=50)
 
 
 class RefreshUrlRequest(BaseModel):

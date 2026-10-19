@@ -1470,7 +1470,7 @@ function waitReason(d){
   if(active.length>=settingsCache.max_concurrent_downloads) return "Waiting for a free slot";
   // The per-site limit is a connection budget: a split-file download
   // holds several of its connections.
-  const lim=settingsCache.max_connections_per_site, key=domainKey(d.url);
+  const lim=settingsCache.site_connection_limit, key=domainKey(d.url);
   const used=active.filter(x=>domainKey(x.url)===key).reduce((n,x)=>n+Math.max(1,x.connections||1),0);
   if(lim && used>=lim)
     return "Waiting — site connection limit ("+lim+") reached for "+key;
@@ -2044,21 +2044,21 @@ function settingsPanes(){
         '<input class="input mono" type="number" min="'+SLOT_MIN+'" max="'+SLOT_MAX+'" step="1" id="setMaxConcurrent" data-input="max_concurrent_downloads" value="'+esc(settingsCache.max_concurrent_downloads)+'" style="flex:1;width:auto">'+
         '<button class="btn btn-primary btn-sm" id="setMaxSave">Save</button>'+
       '</div>'+
-      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately. Each site is also capped by Connections per site.</p>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Type any number from 1 to 50. Saving starts queued downloads immediately.</p>'+
       '</div>'+
-      '<div class="field"><label class="label" for="setSiteConns">Connections per site</label>'+
+      '<div class="field"><label class="label" for="setSiteConns">Connections per site (optional)</label>'+
       '<div style="display:flex;gap:8px;align-items:center">'+
-        '<input class="input mono" type="number" min="1" max="50" step="1" id="setSiteConns" value="'+esc(settingsCache.max_connections_per_site||10)+'" style="flex:1;width:auto">'+
+        '<input class="input mono" type="number" min="0" max="50" step="1" id="setSiteConns" value="'+esc(settingsCache.site_connection_limit||0)+'" style="flex:1;width:auto">'+
         '<button class="btn btn-primary btn-sm" id="setSiteConnsSave">Save</button>'+
       '</div>'+
-      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Most connections to one site at once. Subdomains count together, e.g. v1 and v2.cdnde.com. Some servers start refusing above about 12. Saving starts queued downloads immediately.</p>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">0 = no limit, so Downloads at once decides. Set a number only if a site starts failing with many downloads at once (some servers refuse above about 12). Subdomains count as one site, e.g. v1 and v2.cdnde.com.</p>'+
       '</div>'+
       '<div class="field"><label class="label" for="setConnections">Connections per download</label>'+
       '<div style="display:flex;gap:8px;align-items:center">'+
         '<input class="input mono" type="number" min="1" max="8" step="1" id="setConnections" value="'+esc(settingsCache.connections_per_download||1)+'" style="flex:1;width:auto">'+
         '<button class="btn btn-primary btn-sm" id="setConnSave">Save</button>'+
       '</div>'+
-      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Large files (8 MB+) on servers that support it are split across this many connections. Each site gets '+esc(settingsCache.max_connections_per_site||10)+' connections in total, so more per file means fewer files from that site at once. 1 turns splitting off.</p>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Large files (8 MB+) on servers that support it are split across this many connections. Each connection counts toward Connections per site when that limit is set. 1 turns splitting off.</p>'+
       '</div>'+
       switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
       '<div class="field"><label class="label" for="setDupPolicy">When a link was already downloaded</label>'+
@@ -2132,9 +2132,9 @@ async function settingsDialog(){
     if(siteInput && siteSave){
       siteInput.addEventListener("keydown",e=>{ if(e.key==="Enter") siteSave.click(); });
       siteSave.onclick=async()=>{
-        const val=Math.max(1,Math.min(50,Math.round(+siteInput.value)||1));
+        const val=Math.max(0,Math.min(50,Math.round(+siteInput.value)||0));
         siteInput.value=val;
-        try{ settingsCache=await patch("/api/settings",{max_connections_per_site:val}); toast("ok","Saved — "+val+" connection"+(val!==1?"s":"")+" per site"); render(); }
+        try{ settingsCache=await patch("/api/settings",{site_connection_limit:val}); toast("ok",val?"Saved — "+val+" connection"+(val!==1?"s":"")+" per site":"Saved — no per-site limit"); render(); }
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }

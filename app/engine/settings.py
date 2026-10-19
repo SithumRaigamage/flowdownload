@@ -27,12 +27,12 @@ class Settings:
     # Drawn from the per-site budget, so more per file means fewer files at
     # once from the same site.
     connections_per_download: int = 4
-    # Connection budget per site (domain_key, so v1.cdnde.com and
-    # v2.cdnde.com share one), independent of the max_concurrent_downloads
-    # file count. Too many parallel streams to one CDN make it reset/stall
-    # (trafficdeposit.com answered 503 above ~12). A split-file download uses
-    # several connections from this budget.
-    max_connections_per_site: int = 10
+    # Optional connection budget per site (domain_key, so v1.cdnde.com and
+    # v2.cdnde.com share one), on top of max_concurrent_downloads. 0 = off,
+    # so "Downloads at once" alone decides. Set it for CDNs that reset or
+    # stall under many parallel streams (trafficdeposit.com answered 503
+    # above ~12). A split-file download uses several connections from it.
+    site_connection_limit: int = 0
 
     @classmethod
     def load(cls, path: str) -> "Settings":

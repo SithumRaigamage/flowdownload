@@ -87,7 +87,7 @@ def test_file_changing_mid_download_falls_back_to_single_stream(make_manager, se
 
 
 def test_connection_budget_is_shared_per_site(make_manager, server, wait):
-    mgr = make_manager(connections_per_download=4, max_connections_per_site=6)
+    mgr = make_manager(connections_per_download=4, site_connection_limit=6)
     a = mgr.tasks[mgr.add_download(f"{server}/a?delay=0.2", "a.bin")]
     b = mgr.tasks[mgr.add_download(f"{server}/b?delay=0.2", "b.bin")]
     c = mgr.tasks[mgr.add_download(f"{server}/c?delay=0.2", "c.bin")]

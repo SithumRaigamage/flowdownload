@@ -32,7 +32,7 @@ LIMIT = 10
 
 
 def test_dispatch_respects_per_domain_limit(make_manager):
-    mgr = make_manager(max_concurrent_downloads=40, max_connections_per_site=LIMIT)
+    mgr = make_manager(max_concurrent_downloads=40, site_connection_limit=LIMIT)
     spawned = []
 
     def fake_spawn(task_id):
@@ -59,7 +59,7 @@ def test_dispatch_respects_per_domain_limit(make_manager):
 
 
 def test_manual_start_queues_when_domain_full(make_manager):
-    mgr = make_manager(max_connections_per_site=LIMIT)
+    mgr = make_manager(site_connection_limit=LIMIT)
     mgr._spawn = lambda task_id: None
     for i in range(LIMIT):
         task = DownloadTask(url=f"https://x.example.com/{i}", dest_path=f"/tmp/fd-a{i}", status=S.DOWNLOADING)
@@ -70,8 +70,20 @@ def test_manual_start_queues_when_domain_full(make_manager):
     assert extra.status == S.QUEUED
 
 
+def test_downloads_at_once_alone_decides_by_default(make_manager):
+    # One site (v1..v10.cdnde.com) and 30 slots: all 30 run, no hidden cap.
+    mgr = make_manager(max_concurrent_downloads=30)
+    mgr._spawn = lambda task_id: setattr(mgr.tasks[task_id], "status", S.DOWNLOADING)
+    for i in range(35):
+        task = DownloadTask(url=f"https://v{i % 10 + 1}.cdnde.com/f{i}", dest_path=f"/tmp/fd-all-{i}")
+        task.created_at = time.time() + i
+        mgr.tasks[task.id] = task
+    mgr._dispatch_queue()
+    assert sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING) == 30
+
+
 def test_raising_site_limit_starts_queued_downloads(make_manager):
-    mgr = make_manager(max_concurrent_downloads=30, max_connections_per_site=2)
+    mgr = make_manager(max_concurrent_downloads=30, site_connection_limit=2)
     mgr._spawn = lambda task_id: setattr(mgr.tasks[task_id], "status", S.DOWNLOADING)
     for i in range(4):
         task = DownloadTask(url=f"https://v{i}.cdnde.com/f{i}", dest_path=f"/tmp/fd-site-{i}")
@@ -83,7 +95,7 @@ def test_raising_site_limit_starts_queued_downloads(make_manager):
         return sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING)
 
     assert active() == 2
-    mgr.apply_settings(dataclasses.replace(mgr.settings, max_connections_per_site=4))
+    mgr.apply_settings(dataclasses.replace(mgr.settings, site_connection_limit=4))
     assert active() == 4
 
 
