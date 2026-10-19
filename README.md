@@ -72,11 +72,12 @@ python -m pytest                      # ~15 s, local server only
   the file is 8 MB or more and the server supports resumable ranges. Progress
   per piece is kept in a `<file>.part.segments` file next to the `.part`, so
   split downloads resume after a pause or restart too.
-- **Each site gets 6 connections in total** (e.g. every
-  `*.trafficdeposit.com` host counts as one site), on top of the global
-  "Downloads at once" setting. A split download uses several of them, so
-  with the default of 4, one site runs a 4-connection file plus a
-  2-connection file. Extra downloads wait in the queue, and the row says why.
+- **Each site gets a connection budget** (Settings → Downloads →
+  "Connections per site", default 10; every `*.trafficdeposit.com` host
+  counts as one site), on top of the global "Downloads at once" setting. A
+  split download uses several of them, so with the default of 4, one site
+  runs two 4-connection files plus a 2-connection file. Extra downloads wait
+  in the queue, and the row says why. Some CDNs answer 503 above about 12.
 - **Chrome's page address is sent as the Referer**, since many CDNs refuse
   or throttle downloads without one.
 - **Expired links can be refreshed**: right-click an unfinished download →

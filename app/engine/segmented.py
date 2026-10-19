@@ -3,7 +3,7 @@
 DownloadWorker.run() tries run_segmented() first. It only takes over when
 splitting is both useful and safe:
 
-  * the manager granted more than one connection (see MAX_PER_DOMAIN -- the
+  * the manager granted more than one connection (see Settings.max_connections_per_site -- the
     per-site limit is a connection budget, not a file count),
   * the server answers a ranged probe with 206 + a Content-Range total of at
     least MIN_TOTAL, and

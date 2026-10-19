@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from app.api.schemas import SettingsOut
 from app.api.server import create_app
-from app.engine.manager import MAX_PER_DOMAIN
 from app.engine.settings import Settings
 from app.version import APP_VERSION
 
@@ -26,5 +25,5 @@ def test_version_matches_version_file():
         assert APP_VERSION == f.read().strip()
 
 
-def test_settings_out_exposes_per_domain_limit():
-    assert SettingsOut.from_settings(Settings()).max_per_domain == MAX_PER_DOMAIN
+def test_settings_out_exposes_per_site_limit():
+    assert SettingsOut.from_settings(Settings(max_connections_per_site=25)).max_connections_per_site == 25

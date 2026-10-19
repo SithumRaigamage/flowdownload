@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.engine.manager import MAX_PER_DOMAIN
 from app.engine.models import DownloadTask
 from app.engine.settings import Settings
 
@@ -102,9 +101,7 @@ class SettingsOut(BaseModel):
     auto_folder_by_type: bool
     duplicate_policy: Literal["rename", "skip", "overwrite"]
     connections_per_download: int
-    # Read-only engine constant, sent so the UI can explain why a download
-    # is still queued without hard-coding the limit a second time.
-    max_per_domain: int = MAX_PER_DOMAIN
+    max_connections_per_site: int
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "SettingsOut":
@@ -116,6 +113,7 @@ class SettingsOut(BaseModel):
             auto_folder_by_type=settings.auto_folder_by_type,
             duplicate_policy=settings.duplicate_policy,
             connections_per_download=settings.connections_per_download,
+            max_connections_per_site=settings.max_connections_per_site,
         )
 
 
@@ -127,6 +125,7 @@ class SettingsPatch(BaseModel):
     auto_folder_by_type: bool | None = None
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
+    max_connections_per_site: int | None = Field(default=None, ge=1, le=50)
 
 
 class RefreshUrlRequest(BaseModel):

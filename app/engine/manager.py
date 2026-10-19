@@ -19,11 +19,6 @@ from app.engine.storage import Storage
 
 ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 EXTERNAL_POLL_INTERVAL_MS = 2000
-# Connection budget per site (domain_key), independent of the global
-# max_concurrent_downloads file count. Many parallel streams to the same CDN
-# make it reset/stall connections, which shows up as a wall of RETRYING
-# tasks. A split-file download uses several connections from this budget.
-MAX_PER_DOMAIN = 10
 MAX_CONNECTIONS_PER_DOWNLOAD = 8
 # Progress ticks arrive ~4x/s per download; persisting each one meant dozens
 # of SQLite commits per second on the main thread. The UI still gets every
@@ -260,7 +255,7 @@ class DownloadManager(QObject):
             self.task_updated.emit(task_id)
             return
         if (self._active_count() >= self.settings.max_concurrent_downloads
-                or self._connections_used(domain_key(task.url)) >= MAX_PER_DOMAIN):
+                or self._connections_used(domain_key(task.url)) >= self._site_limit()):
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -411,6 +406,10 @@ class DownloadManager(QObject):
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
 
+    def _site_limit(self) -> int:
+        """Per-site connection budget; guards against a hand-edited settings.json."""
+        return max(1, int(self.settings.max_connections_per_site))
+
     def _connections_used(self, domain: str, exclude: str | None = None) -> int:
         """Connections active downloads hold on this site's budget."""
         return sum(max(1, t.connections) for t in self.tasks.values()
@@ -422,6 +421,7 @@ class DownloadManager(QObject):
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
+        site_limit = self._site_limit()
         per_domain: dict[str, int] = {}  # connections in use per site
         for t in self.tasks.values():
             if t.status in ACTIVE_STATUSES:
@@ -443,7 +443,7 @@ class DownloadManager(QObject):
             # A domain at its cap is skipped, not a stopping point -- a queued
             # task from another site can still take the free slot.
             key = domain_key(task.url)
-            if per_domain.get(key, 0) >= MAX_PER_DOMAIN:
+            if per_domain.get(key, 0) >= site_limit:
                 continue
             self._spawn(task.id)
             per_domain[key] = per_domain.get(key, 0) + max(1, task.connections)
@@ -455,7 +455,7 @@ class DownloadManager(QObject):
         # per-download setting. The worker reports back (connections_resolved)
         # if it ends up using fewer, which frees the rest for other downloads.
         wanted = max(1, min(int(self.settings.connections_per_download), MAX_CONNECTIONS_PER_DOWNLOAD))
-        free = MAX_PER_DOMAIN - self._connections_used(domain_key(task.url), exclude=task_id)
+        free = self._site_limit() - self._connections_used(domain_key(task.url), exclude=task_id)
         task.connections = max(1, min(wanted, free))
         task.status = DownloadStatus.DOWNLOADING
         task.error_message = ""

@@ -1,11 +1,11 @@
 """DownloadManager scheduling and lifecycle, end to end against the local server."""
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 
 from app.engine import manager as manager_mod
-from app.engine.manager import MAX_PER_DOMAIN
 from app.engine.paths import domain_key, strip_dedupe_suffix
 from app.engine.models import DownloadStatus as S
 from app.engine.models import DownloadTask
@@ -28,8 +28,11 @@ def test_strip_dedupe_suffix():
     assert strip_dedupe_suffix("a (b).mp4") == "a (b).mp4"
 
 
+LIMIT = 10
+
+
 def test_dispatch_respects_per_domain_limit(make_manager):
-    mgr = make_manager(max_concurrent_downloads=40)
+    mgr = make_manager(max_concurrent_downloads=40, max_connections_per_site=LIMIT)
     spawned = []
 
     def fake_spawn(task_id):
@@ -37,7 +40,7 @@ def test_dispatch_respects_per_domain_limit(make_manager):
         spawned.append(task_id)
 
     mgr._spawn = fake_spawn
-    urls = [f"https://a{i % 2}.example.com/f{i}" for i in range(MAX_PER_DOMAIN + 4)] + ["https://other.test/1", "https://other.test/2"]
+    urls = [f"https://a{i % 2}.example.com/f{i}" for i in range(LIMIT + 4)] + ["https://other.test/1", "https://other.test/2"]
     for i, url in enumerate(urls):
         task = DownloadTask(url=url, dest_path=f"/tmp/fd-test-{i}")
         task.created_at = time.time() + i
@@ -47,24 +50,41 @@ def test_dispatch_respects_per_domain_limit(make_manager):
     def active(domain):
         return sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING and domain_key(t.url) == domain)
 
-    assert active("example.com") == MAX_PER_DOMAIN
+    assert active("example.com") == LIMIT
     assert active("other.test") == 2
     mgr.tasks[spawned[0]].status = S.COMPLETED
     mgr._dispatch_queue()
-    assert active("example.com") == MAX_PER_DOMAIN
-    assert len(spawned) == MAX_PER_DOMAIN + 2 + 1
+    assert active("example.com") == LIMIT
+    assert len(spawned) == LIMIT + 2 + 1
 
 
 def test_manual_start_queues_when_domain_full(make_manager):
-    mgr = make_manager()
+    mgr = make_manager(max_connections_per_site=LIMIT)
     mgr._spawn = lambda task_id: None
-    for i in range(MAX_PER_DOMAIN):
+    for i in range(LIMIT):
         task = DownloadTask(url=f"https://x.example.com/{i}", dest_path=f"/tmp/fd-a{i}", status=S.DOWNLOADING)
         mgr.tasks[task.id] = task
     extra = DownloadTask(url="https://y.example.com/z", dest_path="/tmp/fd-b", status=S.PAUSED)
     mgr.tasks[extra.id] = extra
     mgr.start(extra.id)
     assert extra.status == S.QUEUED
+
+
+def test_raising_site_limit_starts_queued_downloads(make_manager):
+    mgr = make_manager(max_concurrent_downloads=30, max_connections_per_site=2)
+    mgr._spawn = lambda task_id: setattr(mgr.tasks[task_id], "status", S.DOWNLOADING)
+    for i in range(4):
+        task = DownloadTask(url=f"https://v{i}.cdnde.com/f{i}", dest_path=f"/tmp/fd-site-{i}")
+        task.created_at = time.time() + i
+        mgr.tasks[task.id] = task
+    mgr._dispatch_queue()
+
+    def active():
+        return sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING)
+
+    assert active() == 2
+    mgr.apply_settings(dataclasses.replace(mgr.settings, max_connections_per_site=4))
+    assert active() == 4
 
 
 def test_auto_folder_by_type(make_manager, server, wait, tmp_path):
