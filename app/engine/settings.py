@@ -33,6 +33,10 @@ class Settings:
     # stall under many parallel streams (trafficdeposit.com answered 503
     # above ~12). A split-file download uses several connections from it.
     site_connection_limit: int = 0
+    # "system" follows macOS's light/dark appearance; "light"/"dark" pin it.
+    # Kept here (not just in the page) so the native window and title bar
+    # can match the page from the moment the app starts.
+    theme: str = "system"
 
     @classmethod
     def load(cls, path: str) -> Settings:

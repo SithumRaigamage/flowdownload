@@ -3,11 +3,18 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 from app.engine.manager import DownloadManager
+from app.ui.macos_window import blend_title_bar
+
+# The page's --background in each theme (app/web/index.html :root / .dark):
+# the title bar and the web view's own backdrop take the same colour, so the
+# window reads as one surface and never flashes white while loading.
+PAGE_BACKGROUND = {False: "#F4F4F3", True: "#0F0F10"}
 
 
 class WebMainWindow(QMainWindow):
@@ -33,7 +40,8 @@ class WebMainWindow(QMainWindow):
         # Use Qt's standard window decoration so macOS draws its native
         # traffic-light buttons (close/minimize/zoom). The HTML frontend
         # does NOT draw a custom titlebar of its own; the entire UI sits
-        # below the OS-managed title bar.
+        # below the OS-managed title bar, which apply_theme() blends into
+        # the page (transparent, no title text, page-coloured).
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("FlowDownload")
         self.resize(1180, 760)
@@ -58,6 +66,30 @@ class WebMainWindow(QMainWindow):
 
         self.view.load(self._appUrl)
         self.setCentralWidget(self.view)
+
+        manager.settings_changed.connect(self.apply_theme)
+        hints = QApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):  # macOS switched light/dark
+            hints.colorSchemeChanged.connect(lambda _scheme: self.apply_theme())
+        self.apply_theme()
+
+    def is_dark(self) -> bool:
+        """The effective theme: the setting, or macOS's appearance for "system"."""
+        theme = getattr(self.manager.settings, "theme", "system")
+        if theme in ("light", "dark"):
+            return theme == "dark"
+        hints = QApplication.styleHints()
+        return hasattr(hints, "colorScheme") and hints.colorScheme() == Qt.ColorScheme.Dark
+
+    def apply_theme(self) -> None:
+        dark = self.is_dark()
+        self.view.page().setBackgroundColor(QColor(PAGE_BACKGROUND[dark]))
+        blend_title_bar(self, PAGE_BACKGROUND[dark], dark)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # The native window only exists once shown; blend it now too.
+        self.apply_theme()
 
     def closeEvent(self, event) -> None:
         # Read live off the manager rather than a snapshot taken at

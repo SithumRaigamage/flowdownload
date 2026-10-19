@@ -72,21 +72,30 @@ def ui(qapp, wait, make_manager, tmp_path):
         server.stop()
 
 
-def test_version_in_header_and_about_tab(ui):
+def test_version_in_about_tab(ui):
     _, page = ui()
-    assert page.js("document.getElementById('appVersion').textContent") == f"FlowDownload v{APP_VERSION}"
     page.js("document.getElementById('settingsBtn').click()")
     assert page.wait_js("!!document.querySelector('[data-st=\"About\"]')")
     page.js("document.querySelector('[data-st=\"About\"]').click()")
     assert f"v{APP_VERSION}" in page.js("document.getElementById('setPane').textContent")
 
 
-def test_theme_survives_reload(ui):
-    _, page = ui()
+def test_theme_toggle_is_saved_and_survives_reload(ui, wait):
+    mgr, page = ui()
     assert page.js("document.documentElement.classList.contains('dark')") is False
     page.js("document.getElementById('themeBtn').click()")
+    # Saved on the server too, so the native title bar can match.
+    assert wait(lambda: mgr.settings.theme == "dark")
     page.load()
     assert page.js("document.documentElement.classList.contains('dark')") is True
+
+
+def test_connection_notice_only_when_lost(ui):
+    _, page = ui()
+    assert page.js("document.getElementById('connNotice').classList.contains('hidden')") is True
+    page.js("(ws.onclose = () => { ui.wsConnected = false; renderStats(); }, ws.close(), true)")
+    assert page.wait_js("!document.getElementById('connNotice').classList.contains('hidden')")
+    assert page.js("document.getElementById('dlView').classList.contains('stale')") is True
 
 
 def test_row_badge_follows_state_changes(ui, server, wait):

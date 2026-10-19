@@ -108,6 +108,7 @@ class SettingsOut(BaseModel):
     duplicate_policy: Literal["rename", "skip", "overwrite"]
     connections_per_download: int
     site_connection_limit: int
+    theme: Literal["system", "light", "dark"]
 
     @classmethod
     def from_settings(cls, settings: Settings) -> SettingsOut:
@@ -120,6 +121,7 @@ class SettingsOut(BaseModel):
             duplicate_policy=settings.duplicate_policy,
             connections_per_download=settings.connections_per_download,
             site_connection_limit=settings.site_connection_limit,
+            theme=settings.theme if settings.theme in ("system", "light", "dark") else "system",
         )
 
 
@@ -134,6 +136,7 @@ class SettingsPatch(BaseModel):
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
     site_connection_limit: int | None = Field(default=None, ge=0, le=50)
+    theme: Literal["system", "light", "dark"] | None = None
 
     @field_validator("download_dir")
     @classmethod

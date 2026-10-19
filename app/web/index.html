@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlowDownload</title>
-<script>try{ if(localStorage.getItem("fd-theme")==="dark") document.documentElement.classList.add("dark"); }catch(_){}</script>
+<script>
+// First paint only: the saved theme ("system" | "light" | "dark") is cached
+// here so the page doesn't flash light before /api/settings answers.
+try{ const t=localStorage.getItem("fd-theme")||"system";
+  if(t==="dark" || (t==="system" && matchMedia("(prefers-color-scheme: dark)").matches)) document.documentElement.classList.add("dark"); }catch(_){}
+</script>
 <style>
 /* ============================================================
    "Bento Mono": greyscale, rounded cards, one floating dock.
@@ -139,16 +144,17 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 
 /* ---------- shell ---------- */
 .app{height:100vh;display:flex;flex-direction:column}
-.page{flex:1;overflow-y:auto;padding:28px 32px 128px}
-.top{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 24px;margin-bottom:24px}
-.top h1{margin:0;font-size:40px;font-weight:600;letter-spacing:-.03em;line-height:1}
-.top p{margin:6px 0 0;font-size:15px;color:var(--muted-foreground)}
-.top-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.pill-status{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 15px;border-radius:18px;
-  background:var(--card);border:1px solid var(--border);font-size:13px;color:var(--muted-foreground)}
-.netdot{width:7px;height:7px;border-radius:50%;background:var(--foreground);flex:none}
-.netdot.off{background:var(--destructive)}
-.app-version{font-size:11px;color:var(--muted-foreground)}
+.page{flex:1;overflow-y:auto;padding:6px 32px 128px}
+/* The window's title bar is blended into this background (app/ui/
+   macos_window.py), so the page starts right under the traffic lights. */
+.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;margin-bottom:20px}
+.top h1{margin:0;font-size:30px;font-weight:600;letter-spacing:-.025em;line-height:1.1}
+.top p{margin:0;font-size:15px;color:var(--muted-foreground)}
+/* Only shown while the live connection is down (see renderStats). */
+.conn{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 13px;border-radius:15px;align-self:center;
+  background:var(--card);border:1px solid var(--border);font-size:13px;color:var(--foreground)}
+.conn::before{content:"";width:12px;height:12px;border-radius:50%;border:2px solid var(--input);border-top-color:var(--foreground);animation:spin .9s linear infinite}
+.stale{opacity:.6;transition:opacity .2s}
 
 .card{background:var(--card);border:1px solid var(--border);border-radius:28px}
 
@@ -421,14 +427,9 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
   <div class="page" id="page">
 
     <header class="top">
-      <div>
-        <h1 id="viewTitle">Downloads</h1>
-        <p id="summary">Loading…</p>
-      </div>
-      <div class="top-right">
-        <span class="pill-status"><i class="netdot" id="netdot"></i><span id="netlabel">Connecting…</span></span>
-        <span class="app-version mono" id="appVersion"></span>
-      </div>
+      <h1 id="viewTitle">Downloads</h1>
+      <p id="summary">Loading…</p>
+      <span class="conn hidden" id="connNotice" role="status">Reconnecting… numbers may be out of date</span>
     </header>
 
     <div id="dlView">
@@ -532,7 +533,6 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 "use strict";
 const TOKEN = "__FLOWDOWNLOAD_TOKEN__";
 const APP_VERSION = "__FLOWDOWNLOAD_VERSION__";
-document.getElementById("appVersion").textContent = "FlowDownload v"+APP_VERSION;
 const KB=1024, MB=KB*1024, GB=MB*1024;
 
 /* ---------- API ---------- */
@@ -556,7 +556,8 @@ const del = (path)=>api(path, {method:"DELETE"});
 
 /* ---------- state ---------- */
 let downloads = [];
-let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false, duplicate_policy:"rename"};
+let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false, duplicate_policy:"rename",
+  theme:(()=>{ try{ return localStorage.getItem("fd-theme")||"system"; }catch(_){ return "system"; } })()};
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
@@ -1543,10 +1544,16 @@ function renderStats(){
   document.getElementById("summary").textContent = ui.view==="library"
     ? libVisible("all").length+" finished videos and tracks"
     : (downloads.length ? parts.join(" · ") : "Nothing yet — add a link to get started");
-  const dot=document.getElementById("netdot");
-  dot.classList.toggle("off",!ui.wsConnected);
-  document.getElementById("netlabel").textContent=ui.wsConnected?"Connected":"Reconnecting…";
+  // Mention the connection only when it's actually lost: after a drop, or
+  // if it hasn't come up within a few seconds of starting -- never as a
+  // permanent "Connected" badge for the normal case.
+  const lost = !ui.wsConnected && (wsEverConnected || connGraceOver);
+  document.getElementById("connNotice").classList.toggle("hidden", !lost);
+  document.getElementById("dlView").classList.toggle("stale", lost);
+  document.getElementById("libGrid").classList.toggle("stale", lost);
 }
+let connGraceOver=false;
+setTimeout(()=>{ connGraceOver=true; renderStats(); }, 3000);
 
 function renderBulk(){
   const bar=document.getElementById("bulkbar");
@@ -1776,9 +1783,24 @@ document.getElementById("incSlot").addEventListener("click", async (e) => {
     render();
   }catch(err){ toast("err","Couldn't increase slots",err.message); }
 });
+// Theme: "system" follows macOS; "light"/"dark" pin it. The setting lives on
+// the server so the native window's title bar matches (app/ui/web_window.py);
+// localStorage only caches it for the first paint.
+const systemDark=matchMedia("(prefers-color-scheme: dark)");
+function applyTheme(theme){
+  const dark = theme==="dark" || (theme!=="light" && systemDark.matches);
+  document.documentElement.classList.toggle("dark", dark);
+  try{ localStorage.setItem("fd-theme", theme||"system"); }catch(_){}
+}
+systemDark.addEventListener("change",()=>applyTheme(settingsCache.theme));
+async function setTheme(theme){
+  applyTheme(theme);  // instantly; the save below only has to persist it
+  try{ settingsCache=await patch("/api/settings",{theme}); }
+  catch(err){ toast("err","Couldn't save appearance",err.message); }
+}
+// The dock's moon button flips what you see now, pinning light or dark.
 function toggleTheme(){
-  const dark=document.documentElement.classList.toggle("dark");
-  try{ localStorage.setItem("fd-theme", dark?"dark":"light"); }catch(_){}
+  setTheme(document.documentElement.classList.contains("dark") ? "light" : "dark");
 }
 document.getElementById("themeBtn").addEventListener("click",()=>{
   toggleTheme();
@@ -1928,7 +1950,11 @@ function switchRow(t,p,key,on){
 
 function settingsPanes(){
   return {
-    General: switchRow("Keep running when the window closes","The red close button minimizes to the menu bar instead of quitting.","minimize_to_tray",settingsCache.minimize_to_tray)+
+    General: '<div class="setrow"><div class="txt"><div>Appearance</div><p>System follows macOS light and dark mode.</p></div>'+
+        '<select class="input" id="setTheme" aria-label="Appearance" style="width:auto">'+
+          ["system","light","dark"].map(t=>'<option value="'+t+'"'+((settingsCache.theme||"system")===t?" selected":"")+'>'+t[0].toUpperCase()+t.slice(1)+'</option>').join("")+
+        '</select></div>'+
+      switchRow("Keep running when the window closes","The red close button minimizes to the menu bar instead of quitting.","minimize_to_tray",settingsCache.minimize_to_tray)+
       switchRow("Notify when a download finishes","A macOS notification for completed or failed downloads.","notifications_enabled",settingsCache.notifications_enabled),
     Downloads: '<div class="field" style="padding-top:10px"><label class="label">Default folder</label>'+
       '<div style="display:flex;gap:8px"><input class="input mono" id="setDownloadDir" readonly value="'+esc(settingsCache.download_dir)+'" style="flex:1">'+
@@ -2032,6 +2058,8 @@ async function settingsDialog(){
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }
+    const themeSel=dlg.querySelector("#setTheme");
+    if(themeSel) themeSel.addEventListener("change",()=>setTheme(themeSel.value));
     const dupPolicy=dlg.querySelector("#setDupPolicy");
     if(dupPolicy) dupPolicy.addEventListener("change",async()=>{
       const val=dupPolicy.value;
@@ -2215,6 +2243,7 @@ async function boot(){
     ]);
     downloads = tasks.map(normalize);
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
+    applyTheme(settingsCache.theme);
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
   // Start in downloads view. render() below ensures the library count is
   // populated even when downloads were already completed before this session.

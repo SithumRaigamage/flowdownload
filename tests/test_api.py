@@ -230,3 +230,15 @@ def test_slow_websocket_client_is_cut_off_not_buffered_forever():
         assert items[-1] is events.OVERFLOW and items[-2] == {"n": events.QUEUE_LIMIT - 1}
     finally:
         loop.close()
+
+
+def test_theme_setting_defaults_to_system_and_is_validated():
+    import pytest
+    from pydantic import ValidationError
+
+    from app.api.schemas import SettingsPatch
+
+    assert SettingsOut.from_settings(Settings()).theme == "system"
+    assert SettingsPatch(theme="dark").theme == "dark"
+    with pytest.raises(ValidationError):
+        SettingsPatch(theme="sepia")

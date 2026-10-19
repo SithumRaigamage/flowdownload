@@ -56,6 +56,7 @@ class DownloadManager(QObject):
     task_updated = Signal(str)
     task_removed = Signal(str)
     task_finished = Signal(str, str)  # task_id, status_value ("completed" or "failed")
+    settings_changed = Signal()
 
     def __init__(self, storage: Storage, settings: Settings, parent=None):
         super().__init__(parent)
@@ -348,6 +349,7 @@ class DownloadManager(QObject):
     def apply_settings(self, settings: Settings) -> None:
         self.settings = settings
         self._dispatch_queue()
+        self.settings_changed.emit()
 
     def shutdown(self) -> None:
         """Stop every running download and wait for threads to exit cleanly.
