@@ -37,6 +37,7 @@ from app.media import transcode
 from app.version import APP_VERSION
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
+FONTS_DIR = FRONTEND_DIR / "fonts"
 NATIVE_HOST_MANIFEST = Path.home() / (
     "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
 )
@@ -165,6 +166,18 @@ def create_app(
             key="flowdownload_token", value=token,
             httponly=True, samesite="strict", path="/",
         )
+        return response
+
+    @app.get("/fonts/{name}")
+    def font(name: str):
+        # The UI's bundled typefaces (app/web/fonts). Public, like any page
+        # asset -- nothing here is user data -- and served by exact
+        # filename from a fixed folder, never a client-built path.
+        path = FONTS_DIR / name
+        if not name.endswith(".woff2") or path.parent != FONTS_DIR or not path.is_file():
+            raise HTTPException(status_code=404, detail="No such font")
+        response = FileResponse(path, media_type="font/woff2")
+        response.headers["Cache-Control"] = "max-age=31536000, immutable"
         return response
 
     def require_token(authorization: str | None = Header(default=None)) -> None:

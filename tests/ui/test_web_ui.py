@@ -72,7 +72,7 @@ def ui(qapp, wait, make_manager, tmp_path):
         server.stop()
 
 
-def test_version_in_sidebar_and_about_tab(ui):
+def test_version_in_header_and_about_tab(ui):
     _, page = ui()
     assert page.js("document.getElementById('appVersion').textContent") == f"FlowDownload v{APP_VERSION}"
     page.js("document.getElementById('settingsBtn').click()")

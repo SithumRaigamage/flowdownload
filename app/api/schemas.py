@@ -28,6 +28,9 @@ class DownloadOut(BaseModel):
     digest_verified: bool
     referrer: str
     connections: int
+    # [[start, done, end], ...] byte ranges of a split download, for the UI's
+    # file-map ring; empty for single-stream downloads.
+    segments: list[list[int]] = []
     created_at: float
     updated_at: float
 
@@ -55,6 +58,7 @@ class DownloadOut(BaseModel):
             digest_verified=task.digest_verified,
             referrer=task.referrer,
             connections=task.connections,
+            segments=task.segments,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )

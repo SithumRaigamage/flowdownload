@@ -29,6 +29,7 @@ APP_VERSION = (ROOT / "VERSION").read_text().strip()
 # into Contents/Resources so Finder "Get Info" and `defaults read` find it.
 datas = [
     (str(ROOT / "app" / "web" / "index.html"), "app/web"),
+    (str(ROOT / "app" / "web" / "fonts"), "app/web/fonts"),
     (str(ROOT / "app" / "AppIcon.icns"), "Resources"),
     # Read at runtime by app/version.py so the UI can show the build version.
     (str(ROOT / "VERSION"), "."),

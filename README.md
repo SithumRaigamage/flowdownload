@@ -33,8 +33,8 @@ The app keeps its database and settings in `~/.flowdownload/`.
 ### Version
 
 The version lives in the `VERSION` file at the project root. It's embedded
-in the app bundle's Info.plist and shown in the app itself (sidebar footer
-and Settings → About).
+in the app bundle's Info.plist and shown in the app itself (top right of the
+window and Settings → About).
 
 ### Running from source instead
 

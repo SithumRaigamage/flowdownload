@@ -66,6 +66,12 @@ def load_progress(part_path: str) -> int | None:
     return None if state is None else sum(done for _, _, done in state["segments"])
 
 
+def load_segment_map(part_path: str) -> list[list[int]]:
+    """[[start, done, end], ...] per the sidecar (for the UI), or [] if none."""
+    state = _load(segments_path(part_path))
+    return [] if state is None else sorted([a, d, b] for a, b, d in state["segments"])
+
+
 def _load(path: str) -> dict | None:
     try:
         with open(path) as f:
@@ -223,6 +229,10 @@ class _Run:
         with self.lock:
             return sum(s.done for s in self.segments)
 
+    def segment_map(self) -> list[list[int]]:
+        with self.lock:
+            return [[s.start, s.done, s.end] for s in sorted(self.segments, key=lambda s: s.start)]
+
     def save(self) -> None:
         with self.lock:
             segments = [_Segment(s.start, s.end, s.done) for s in self.segments]
@@ -278,6 +288,9 @@ class _Run:
                 speed = (done - last_bytes) / (now - last_emit)
                 w._smoothed_speed = (speed if w._smoothed_speed == 0.0
                                      else SPEED_SMOOTHING * speed + (1 - SPEED_SMOOTHING) * w._smoothed_speed)
+                # The file map (where each piece sits and how far it got)
+                # goes first, so the progress update that follows carries it.
+                w.segments_progress.emit(w.task_id, self.segment_map())
                 w.progress.emit(w.task_id, done, self.total, w._smoothed_speed)
                 last_bytes, last_emit = done, now
                 # RETRYING only while *every* running connection is waiting

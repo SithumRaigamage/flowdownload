@@ -50,6 +50,9 @@ class DownloadTask:
     # Connections currently in use (in memory only, never persisted): counts
     # against the per-site connection budget while the task is active.
     connections: int = 0
+    # A split download's file map, [[start, done, end], ...] by byte offset
+    # (in memory only; the sidecar is the durable copy). Empty otherwise.
+    segments: list = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 

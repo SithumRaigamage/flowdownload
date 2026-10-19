@@ -143,3 +143,19 @@ def test_idle_connections_split_the_remaining_work(make_manager, server, wait, m
     assert open(task.dest_path, "rb").read() == DATA
     assert CONNECTIONS["peak"] >= 3
     assert len([r for r in ranges("/one") if r and not r.endswith("-")]) >= 3  # stolen tails
+
+
+def test_split_download_reports_its_file_map(make_manager, server, wait):
+    from app.api.schemas import DownloadOut
+
+    mgr = make_manager(connections_per_download=4)
+    task = mgr.tasks[mgr.add_download(f"{server}/map?{SLOW}", "map.bin")]
+    assert wait(lambda: len(task.segments) == 4 and any(done for _, done, _ in task.segments))
+    out = DownloadOut.from_task(task)
+    assert [s[0] for s in out.segments] == [0, 100_000, 200_000, 300_000]  # sorted by offset
+    assert all(0 <= done <= end - start + 1 for start, done, end in out.segments)
+    mgr.pause(task.id)
+    assert wait(lambda: task.status == S.PAUSED)
+    relaunched = make_manager(db_name="t.db")  # same DB: the map comes back from the sidecar
+    assert len(relaunched.tasks[task.id].segments) == 4
+    assert wait(lambda: not mgr._workers)

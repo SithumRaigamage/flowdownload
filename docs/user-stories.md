@@ -1,33 +1,36 @@
-# User Stories — FlowDownload Glass UI + Library
+# User Stories — FlowDownload "Bento Mono" UI + Library
 
-This document captures user stories driving the Tier 1 + 2 implementation:
-glass morphism UI redesign and a media-first Library view for completed downloads.
-
----
-
-## Tier 1 — Glass Morphism UI
-
-### Theme & Atmosphere
-
-**As a user**, when I open FlowDownload I see a calm, modern atmosphere — not a flat white or grey pane. The background has subtle, blurred colour blobs behind frosted-glass panels, making the interface feel like it belongs on macOS alongside Control Center and notification banners.
-
-**As a user**, switching between light and dark mode transforms the entire palette, including the atmospheric background, while keeping every surface readable and consistent.
-
-**As a user**, frosted-glass panels (sidebar, sheet, dialogs, toasts, menus) blur the content behind them, giving the UI genuine depth and layering — not just a flat stack of rectangles.
-
-**As a user**, the overall feel is polished: rounded corners, subtle inner highlights on glass panels, smooth animations, and no harsh edges anywhere.
+This document captures user stories driving the UI: the "Bento Mono" design
+(chosen over three rejected directions — a quiet list utility, a dark
+dashboard, and a colourful bento) and a media-first Library view.
 
 ---
 
-### Downloads List
+## Tier 1 — Bento Mono UI
 
-**As a user**, the list of downloads feels like cards floating on the atmospheric background — translucent, clean, readable — not a solid white table.
+### Look
 
-**As a user**, the status bar, sidebar, toolbar, and detail sheet all have the frosted-glass treatment, so every region of the app shares the same visual language.
+**As a user**, the app is calm and greyscale: white rounded cards on a soft grey background, black for progress and the main action. The only colour is a muted red, and it only appears when something failed — so red always means "look at this".
 
-**As a user**, dialogs (new download, settings) are frosted-glass overlays with the blurred background showing through, making them feel like macOS system dialogs.
+**As a user**, switching to dark mode turns the same layout near-black with light text, every surface still readable.
 
-**As a user**, toasts and context menus are frosted too, so they sit naturally over the list without a stark white flash.
+**As a user**, the app renders the same with no network: its typefaces (Instrument Sans, DM Mono) ship inside it.
+
+---
+
+### Downloads
+
+**As a user**, the download most worth watching sits in a large card at the top, with a big percentage, speed, time left, and Pause/Details buttons.
+
+**As a user**, that card's ring is the file's real map: a split download shows one arc per piece at its place in the file, filling as it downloads, so I can see the connections working.
+
+**As a user**, every other download is its own card with a small ring, its status, and its speed — and a failed one stands out with a red edge and its error.
+
+**As a user**, a "Total speed" card shows the last minute as bars, and a "Downloads at once" card lets me change how many run, next to free disk space and Chrome's status.
+
+**As a user**, every action (Add download, Downloads/Library, Start all, Pause all, Clear done, shortcuts, theme, settings) lives in one floating dock at the bottom.
+
+**As a user**, Add download rises from the bottom as a sheet; download details slide in from the right without leaving the list.
 
 ---
 
@@ -35,7 +38,7 @@ glass morphism UI redesign and a media-first Library view for completed download
 
 ### Navigation
 
-**As a user**, the sidebar shows "Downloads" and "Library" as the two top-level destinations, so switching between active downloads and my media library is one click.
+**As a user**, the dock shows "Downloads" and "Library" as the two top-level destinations, so switching between active downloads and my media library is one click.
 
 **As a user**, the Downloads view keeps all the existing filter pills (All, Downloading, Queued, Completed, Failed, etc.) so I can still monitor progress at a glance.
 
@@ -51,7 +54,7 @@ glass morphism UI redesign and a media-first Library view for completed download
 
 **As a user**, hovering a library card reveals a play button, and the thumbnail brightens, communicating interactivity.
 
-**As a user**, clicking a library card opens a **glass modal player** — a frosted-glass card centred over the blurred library grid, with native HTML5 controls, so I can watch a video without leaving the app.
+**As a user**, clicking a library card opens a **modal player** — a rounded card centred over the dimmed library grid, with its own playback controls, so I can watch a video without leaving the app.
 
 **As a user**, the modal player shows the filename and has a clear close button, returning me to the library grid when I dismiss it.
 

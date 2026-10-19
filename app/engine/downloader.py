@@ -53,6 +53,7 @@ class DownloadWorker(QThread):
     digest_computed = Signal(str, str, object)  # task_id, sha256_hex, verified (True/False/None)
     size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
     connections_resolved = Signal(str, int)  # task_id, connections actually in use (may be < granted)
+    segments_progress = Signal(str, object)  # task_id, [[start, done, end], ...] of a split download
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, referrer: str = "",

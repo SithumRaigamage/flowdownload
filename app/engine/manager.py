@@ -168,6 +168,7 @@ class DownloadManager(QObject):
             split_progress = segmented.load_progress(task.part_path)
             if split_progress is not None:
                 task.downloaded_bytes = split_progress
+                task.segments = segmented.load_segment_map(task.part_path)
             elif os.path.exists(task.part_path):
                 task.downloaded_bytes = os.path.getsize(task.part_path)
             task.updated_at = time.time()
@@ -467,6 +468,7 @@ class DownloadManager(QObject):
         worker.digest_computed.connect(self._on_digest_computed)
         worker.size_unverified.connect(self._on_size_unverified)
         worker.connections_resolved.connect(self._on_connections_resolved)
+        worker.segments_progress.connect(self._on_segments_progress)
         worker.finished.connect(lambda tid=task_id: self._on_worker_finished(tid))
         self._workers[task_id] = worker
         worker.start()
@@ -568,6 +570,8 @@ class DownloadManager(QObject):
             self._discard_partial(task)
         if status not in ACTIVE_STATUSES:
             task.connections = 0  # budget is only held while running
+        if status in (DownloadStatus.COMPLETED, DownloadStatus.CANCELLED):
+            task.segments = []
         if status == DownloadStatus.COMPLETED:
             # A finished file is never fetched again, so its browser session
             # cookies have no further use -- don't keep them in the DB forever.
@@ -638,6 +642,11 @@ class DownloadManager(QObject):
                 self._dispatch_queue()  # budget was freed for other downloads
         except Exception as exc:
             self._log(task_id, "error", f"connections handler error: {exc}")
+
+    def _on_segments_progress(self, task_id: str, segments: list) -> None:
+        task = self.tasks.get(task_id)
+        if task is not None:
+            task.segments = segments  # broadcast with the progress update right behind it
 
     def _on_size_unverified(self, task_id: str) -> None:
         self._log(
