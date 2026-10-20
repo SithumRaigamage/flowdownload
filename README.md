@@ -1,12 +1,30 @@
 # FlowDownload
 
-A resumable download manager for macOS with a Chrome extension that reroutes
+A resumable download manager for macOS, Windows and Linux with a Chrome extension that reroutes
 Chrome's downloads through it, so a dropped connection means "retries
 automatically," not "start over from zero."
 
-## Running the app
+## Download
 
-FlowDownload is a PyInstaller-built macOS app. Build it with:
+**[Get the latest release →](https://github.com/SithumRaigamage/flowdownload/releases/latest)**
+
+| OS | File |
+|---|---|
+| macOS (Apple Silicon / Intel) | `.dmg` (`macos-arm64` / `macos-x64`) |
+| Windows 10/11 | `-windows-x64-setup.exe` |
+| Linux | `.AppImage` or `.tar.gz` |
+| Chrome extension | `-chrome-extension.zip` |
+
+See **[docs/INSTALL.md](docs/INSTALL.md)** for step-by-step install
+instructions, including the first-launch warning (the builds aren't
+code-signed yet) and setting up the Chrome extension. A packaged build
+registers itself with Chrome on launch, so no setup script is needed.
+
+Maintainers: see [docs/RELEASING.md](docs/RELEASING.md) to publish a new version.
+
+## Building from source (macOS)
+
+FlowDownload is a PyInstaller-built app. On macOS, build it with:
 
 ```bash
 ./scripts/build_app.sh                  # build into dist/FlowDownload.app
@@ -102,6 +120,9 @@ that environment.
 
 ## Installing the Chrome extension
 
+Using a downloaded release? Follow [docs/INSTALL.md](docs/INSTALL.md#chrome-extension-optional)
+instead. The steps below are for a source checkout.
+
 First register the native messaging host (the small program Chrome hands
 downloads to):
 
@@ -158,8 +179,13 @@ Remove the extension from `chrome://extensions`, then delete the native
 messaging registration:
 
 ```bash
+# macOS
 rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
+# Linux
+rm ~/.config/{google-chrome,chromium}/NativeMessagingHosts/com.flowdownload.host.json
 ```
+
+On Windows, uninstalling FlowDownload removes the registration.
 
 ## Troubleshooting
 
@@ -186,7 +212,7 @@ rm ~/"Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdow
 
 ## Roadmap
 
-Known gaps and possible future work (platform support beyond macOS, code
-signing, bandwidth throttling, etc.) are
+Known gaps and possible future work (code signing, bandwidth throttling,
+etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 

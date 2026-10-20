@@ -7,27 +7,9 @@ context to pick up cold.
 
 ## Platform support
 
-### macOS only
-Every OS touchpoint is Mac-specific:
-- `app/main.py`, `native_host/flowdownload_host.py` — app data dir
-  (`~/.flowdownload/`) is fine cross-platform, but...
-- `scripts/setup_chrome_integration.py` — registers the native messaging
-  host at `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`,
-  a macOS-only path (Windows uses a registry key; Linux uses
-  `~/.config/google-chrome/NativeMessagingHosts/`)
-- `dist/FlowDownload.app` — the whole `.app` bundle structure
-  (`Info.plist`, `Contents/MacOS/...`) is macOS-only; Windows would need an
-  `.exe` + `.ico` (e.g. via PyInstaller), Linux a `.desktop` file
-- `app/ui/tray.py` — `QSystemTrayIcon` itself is cross-platform (Qt), so
-  this one mostly just works elsewhere already
-
-To port: keep the engine layer (`app/engine/`) as-is — it's plain Python,
-no macOS dependencies — and add a platform-specific packaging + native-host
-registration path per OS.
-
 ### Only Google Chrome (stable channel)
 `scripts/setup_chrome_integration.py` registers the native host for the
-default Chrome install only. Brave, Edge, Chrome Beta/Canary, and other
+default Chrome install only (plus Chromium on Linux). Brave, Edge, Chrome Beta/Canary, and other
 Chromium-based browsers each read their *own* native messaging hosts
 directory (usually named after the browser but same JSON format) and would
 each need the same manifest copied there, plus their own "load unpacked
