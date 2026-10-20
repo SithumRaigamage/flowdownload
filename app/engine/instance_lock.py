@@ -53,7 +53,7 @@ class InstanceLock:
     def is_running(pid_file: str) -> bool:
         if not os.path.exists(pid_file):
             return False
-        fd = os.open(pid_file, os.O_RDWR)
+        fd = os.open(pid_file, os.O_RDWR | getattr(os, "O_BINARY", 0))
         try:
             _try_lock(fd)
             _unlock(fd)
@@ -65,7 +65,7 @@ class InstanceLock:
 
     def acquire(self) -> bool:
         os.makedirs(os.path.dirname(self.pid_file), exist_ok=True)
-        fd = os.open(self.pid_file, os.O_CREAT | os.O_RDWR, 0o644)
+        fd = os.open(self.pid_file, os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0), 0o644)
         try:
             _try_lock(fd)
         except OSError as e:

@@ -39,7 +39,7 @@ def call_host(home, message: dict) -> dict:
     proc = subprocess.run(
         [sys.executable, os.path.join(ROOT, "native_host", "flowdownload_host.py")],
         input=struct.pack("<I", len(payload)) + payload,
-        capture_output=True, env={**os.environ, "HOME": str(home)}, timeout=30,
+        capture_output=True, env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)}, timeout=30,
     )
     assert proc.returncode == 0, proc.stderr.decode()
     (length,) = struct.unpack("<I", proc.stdout[:4])

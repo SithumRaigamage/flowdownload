@@ -35,8 +35,10 @@ def test_large_file_downloads_over_parallel_connections(make_manager, server, wa
     assert wait(lambda: task.status == S.COMPLETED)
     assert open(task.dest_path, "rb").read() == DATA
     assert CONNECTIONS["peak"] >= 3
-    bounded = sorted(r for r in ranges("/big") if r and not r.endswith("-"))
-    assert bounded == ["bytes=0-99999", "bytes=100000-199999", "bytes=200000-299999", "bytes=300000-399999"]
+    bounded = {r for r in ranges("/big") if r and not r.endswith("-")}
+    # The initial four-way split; on a slow machine an idle connection may
+    # also steal half of a lagging piece, adding an extra range.
+    assert {"bytes=0-99999", "bytes=100000-199999", "bytes=200000-299999", "bytes=300000-399999"} <= bounded
     assert not os.path.exists(task.segments_path)
     assert task.connections == 0  # budget released once finished
 

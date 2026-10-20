@@ -32,6 +32,20 @@ import requests
 
 from app.engine.models import DownloadStatus
 
+# Binary mode matters on Windows: a text-mode fd turns every \n byte written
+# into \r\n. (O_BINARY only exists there.)
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+if hasattr(os, "pwrite"):
+    _pwrite = os.pwrite
+else:  # Windows has no positional write: seek + write, one writer at a time
+    _PWRITE_LOCK = threading.Lock()
+
+    def _pwrite(fd: int, data: bytes, offset: int) -> int:
+        with _PWRITE_LOCK:
+            os.lseek(fd, offset, os.SEEK_SET)
+            return os.write(fd, data)
+
 MIN_TOTAL = 8 * 1024 * 1024  # smaller files gain little from splitting
 MIN_PART = 2 * 1024 * 1024   # never split into pieces smaller than this
 CHUNK_SIZE = 64 * 1024
@@ -253,7 +267,7 @@ class _Run:
             return tail
 
     def run(self, thread_count: int) -> str:
-        self.fd = os.open(self.w.part_path, os.O_WRONLY)
+        self.fd = os.open(self.w.part_path, os.O_WRONLY | _O_BINARY)
         threads = [threading.Thread(target=self._pull, name=f"segment-{i}", daemon=True)
                    for i in range(thread_count)]
         try:
@@ -359,7 +373,7 @@ class _Run:
                             seg.done += len(chunk)
                         if chunk:
                             try:
-                                os.pwrite(self.fd, chunk, offset)
+                                _pwrite(self.fd, chunk, offset)
                             except OSError:
                                 with self.lock:  # never let the sidecar count unwritten bytes
                                     seg.done -= len(chunk)

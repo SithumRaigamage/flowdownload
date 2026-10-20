@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import sys
 from collections.abc import Collection
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ def domain_key(url: str) -> str:
 
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WINDOWS_ILLEGAL_RE = re.compile(r'[<>:"/\\|?*]')
 
 
 def safe_filename(name: str, fallback: str = "download") -> str:
@@ -34,8 +36,13 @@ def safe_filename(name: str, fallback: str = "download") -> str:
     onto the download folder mean the folder itself, or its parent), and
     leading dots would make the download a hidden file. Control
     characters are dropped too, since they can't be typed or displayed.
+    On Windows, characters it doesn't allow in names become "_".
     """
     name = _CONTROL_CHARS_RE.sub("", os.path.basename(name or "")).strip().lstrip(".")
+    if sys.platform == "win32":
+        # Characters Windows refuses in a filename, and the trailing dots and
+        # spaces it silently drops (which would break the dedupe checks).
+        name = _WINDOWS_ILLEGAL_RE.sub("_", name).rstrip(". ")
     return name or fallback
 
 

@@ -1,6 +1,8 @@
 """The web page and settings payload the UI depends on."""
 from __future__ import annotations
 
+import sys
+
 from app.api.schemas import SettingsOut
 from app.api.server import create_app
 from app.engine.settings import Settings
@@ -60,7 +62,8 @@ def test_stream_handles_non_ascii_filenames(tmp_path):
 
     from app.engine.models import DownloadStatus, DownloadTask
 
-    path = tmp_path / 'тест "1".mp4'
+    # (Windows filenames can't contain a quote.)
+    path = tmp_path / ("тест 1.mp4" if sys.platform == "win32" else 'тест "1".mp4')
     path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
     task = DownloadTask(url="http://x/", dest_path=str(path), status=DownloadStatus.COMPLETED)
     manager = SimpleNamespace(tasks={task.id: task})

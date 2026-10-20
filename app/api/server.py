@@ -149,7 +149,7 @@ def create_app(
         # cookie set below keeps a reload of that page working.
         if not (_is_token(query_token) or _is_token(flowdownload_token)):
             return HTMLResponse("Missing or invalid token", status_code=401)
-        html = (FRONTEND_DIR / "index.html").read_text()
+        html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
         html = html.replace("__FLOWDOWNLOAD_TOKEN__", token).replace("__FLOWDOWNLOAD_VERSION__", APP_VERSION)
         response = HTMLResponse(html)
         # QWebEngineView keeps a persistent on-disk HTTP cache across app
