@@ -8,6 +8,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [release-pipeline]  # TEMP: dry runs before merge
   workflow_dispatch:
 
 permissions:
