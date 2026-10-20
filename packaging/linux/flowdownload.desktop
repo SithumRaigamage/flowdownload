@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FlowDownload
+Comment=Resumable download manager
+Exec=FlowDownload
+Icon=flowdownload
+Categories=Network;FileTransfer;
+Terminal=false
+StartupWMClass=FlowDownload

@@ -6,12 +6,12 @@ import mimetypes
 import os
 import secrets
 import shutil
-import subprocess
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from app import chrome_setup, platform_util
 from app.api.events import OVERFLOW, EventBroadcaster
 from app.api.main_thread import MainThreadBusy, MainThreadExecutor
 from app.api.schemas import (
@@ -38,9 +38,6 @@ from app.version import APP_VERSION
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 FONTS_DIR = FRONTEND_DIR / "fonts"
-NATIVE_HOST_MANIFEST = Path.home() / (
-    "Library/Application Support/Google/Chrome/NativeMessagingHosts/com.flowdownload.host.json"
-)
 
 
 def _sniff_media_type(path: str) -> str | None:
@@ -291,7 +288,7 @@ def create_app(
         if dest_path is None:
             raise HTTPException(status_code=404, detail="No such download")
         path = dest_path if os.path.exists(dest_path) else os.path.dirname(dest_path)
-        subprocess.run(["open", "-R", path], check=False)
+        platform_util.reveal(path)
         return {"ok": True}
 
     @app.get("/api/downloads/{task_id}/stream")
@@ -576,7 +573,7 @@ def create_app(
         # profile identity, so a stale last_ping_time means the extension
         # was disabled or removed even though the manifest is still on disk.
         state = {
-            "host_registered": NATIVE_HOST_MANIFEST.exists(),
+            "host_registered": chrome_setup.is_registered(),
             "last_ping_time": None,
             "last_profile_name": None,
             "all_known_profiles": {},
@@ -595,16 +592,10 @@ def create_app(
     @app.post("/api/pick-folder", response_model=PickFolderResponse)
     def pick_folder(_=Depends(require_token)):
         # Qt's own QFileDialog would need to run on the main thread and
-        # block it for as long as the user takes to choose -- osascript's
+        # block it for as long as the user takes to choose -- the native
         # dialog runs out-of-process instead, so it doesn't stall the
         # DownloadManager or its workers while it's open.
-        result = subprocess.run(
-            ["osascript", "-e", "POSIX path of (choose folder)"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            return PickFolderResponse(path=None)  # user cancelled
-        return PickFolderResponse(path=result.stdout.strip())
+        return PickFolderResponse(path=platform_util.pick_folder())  # None: cancelled
 
     @app.websocket("/api/events")
     async def events(websocket: WebSocket):

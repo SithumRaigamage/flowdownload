@@ -1,7 +1,8 @@
 """Generate app/AppIcon.icns from the in-app icon renderer.
 
 Run from the project root (with venv activated) after editing
-`app/ui/app_icon.py` to update both the runtime icon and the bundle icon:
+`app/ui/app_icon.py` to update both the runtime icon and the bundle icons
+(.icns for macOS, plus .ico for Windows and .png for Linux):
 
     python scripts/build_icon.py
 
@@ -29,6 +30,9 @@ from app.ui.app_icon import make_dock_icon  # noqa: E402
 
 ICON_DIR = ROOT / "app" / "AppIcon.iconset"
 ICNS_PATH = ROOT / "app" / "AppIcon.icns"
+ICO_PATH = ROOT / "app" / "AppIcon.ico"   # Windows exe + installer icon
+PNG_PATH = ROOT / "app" / "AppIcon.png"   # Linux .desktop / AppImage icon
+ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 # macOS .icns expects the icon at all of these pixel sizes so Finder, the
 # Dock, Launchpad, and the app switcher can each grab the right one.
@@ -77,7 +81,47 @@ def _build_icns_with_iconutil(iconset: Path, out: Path) -> None:
     )
 
 
+def _png_bytes(size: int) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+
+    data = QByteArray()
+    buf = QBuffer(data)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    make_dock_icon(size).save(buf, "PNG")
+    buf.close()
+    return bytes(data)
+
+
+def _build_ico(out: Path) -> None:
+    """A multi-size .ico. Every entry is stored as PNG (allowed since
+    Windows Vista), so the file is just a directory in front of the PNGs --
+    no Pillow needed."""
+    import struct
+
+    images = [(size, _png_bytes(size)) for size in ICO_SIZES]
+    header = struct.pack("<HHH", 0, 1, len(images))  # reserved, type=icon, count
+    offset = len(header) + 16 * len(images)
+    entries, blobs = b"", b""
+    for size, png in images:
+        dim = 0 if size >= 256 else size  # 0 means 256 in the ICO directory
+        entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(png), offset)
+        blobs += png
+        offset += len(png)
+    out.write_bytes(header + entries + blobs)
+
+
+def build_windows_linux_icons() -> None:
+    QApplication.instance() or QApplication(sys.argv)
+    _build_ico(ICO_PATH)
+    PNG_PATH.write_bytes(_png_bytes(512))
+    print(f"wrote {ICO_PATH} and {PNG_PATH}")
+
+
 def main() -> None:
+    build_windows_linux_icons()
+    if sys.platform != "darwin":
+        return  # .icns needs macOS's iconutil
+
     iconset = _build_iconset()
     print(f"iconset built at {iconset}")
 

@@ -157,11 +157,30 @@ def test_setup_registers_a_launcher_that_runs_the_host(tmp_path, monkeypatch):
     setup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(setup)
     monkeypatch.setattr(setup, "KEY_DIR", str(tmp_path))
-    monkeypatch.setattr(setup, "SOURCE_LAUNCHER", str(tmp_path / "flowdownload-host"))
+    launcher_name = "flowdownload-host.cmd" if sys.platform == "win32" else "flowdownload-host"
+    monkeypatch.setattr(setup, "SOURCE_LAUNCHER", str(tmp_path / launcher_name))
     monkeypatch.setattr(setup, "APP_BUNDLE_CANDIDATES", (str(tmp_path / "missing.app"),))
     launcher = setup.host_executable(None)
-    assert launcher == str(tmp_path / "flowdownload-host")
+    assert launcher == str(tmp_path / launcher_name)
     ping = json.dumps({"action": "ping"}).encode()
+    home = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
     proc = subprocess.run([launcher, "chrome-extension://x/"], input=struct.pack("<I", len(ping)) + ping,
-                          capture_output=True, env={**os.environ, "HOME": str(tmp_path)}, timeout=30)
+                          capture_output=True, env={**os.environ, **home}, timeout=30)
     assert proc.stdout[4:] == b'{"ok": true}', proc.stderr.decode()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows registers through the registry")
+def test_register_writes_a_manifest_chrome_can_find(tmp_path, monkeypatch):
+    from app import chrome_setup
+
+    monkeypatch.setattr(chrome_setup, "manifest_dirs", lambda: [str(tmp_path / "hosts")])
+    assert not chrome_setup.is_registered()
+    extension_id = chrome_setup.bundled_extension_id()
+    [path] = chrome_setup.register(extension_id, "/opt/FlowDownload/flowdownload-host")
+    with open(path) as f:
+        manifest = json.load(f)
+    assert manifest["name"] == "com.flowdownload.host"
+    assert manifest["path"] == "/opt/FlowDownload/flowdownload-host"
+    assert manifest["allowed_origins"] == [f"chrome-extension://{extension_id}/"]
+    assert len(extension_id) == 32 and set(extension_id) <= set("abcdefghijklmnop")
+    assert chrome_setup.is_registered()

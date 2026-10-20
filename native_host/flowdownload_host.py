@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import struct
-import subprocess
 import sys
 import time
 import traceback
@@ -29,12 +28,14 @@ from app.engine.probe import guess_filename_from_url, probe_identity, validate_d
 from app.engine.queueing import find_completed, queue_download  # noqa: E402
 from app.engine.settings import Settings  # noqa: E402
 from app.engine.storage import Storage  # noqa: E402
+from app.platform_util import IS_MAC, IS_WINDOWS, launch_detached  # noqa: E402
 
 APP_DATA_DIR = os.path.join(os.path.expanduser("~"), ".flowdownload")
 DB_PATH = os.path.join(APP_DATA_DIR, "downloads.db")
 SETTINGS_PATH = os.path.join(APP_DATA_DIR, "settings.json")
 PID_FILE = os.path.join(APP_DATA_DIR, "app.pid")
-VENV_PYTHON = os.path.join(PROJECT_ROOT, "venv", "bin", "python3")
+VENV_PYTHON = (os.path.join(PROJECT_ROOT, "venv", "Scripts", "python.exe") if IS_WINDOWS
+               else os.path.join(PROJECT_ROOT, "venv", "bin", "python3"))
 RUN_SCRIPT = os.path.join(PROJECT_ROOT, "run.py")
 # Where build_app.sh can put the app: --install-system, --install, or the
 # plain build output. First existing one wins; none -> run from source.
@@ -42,7 +43,7 @@ APP_BUNDLE_CANDIDATES = (
     "/Applications/FlowDownload.app",
     os.path.join(os.path.expanduser("~"), "Applications", "FlowDownload.app"),
     os.path.join(PROJECT_ROOT, "dist", "FlowDownload.app"),
-)
+) if IS_MAC else ()
 EXTENSION_STATE_FILE = os.path.join(APP_DATA_DIR, "chrome_extension_state.json")
 
 
@@ -70,21 +71,30 @@ def _find_app_bundle() -> str | None:
     return next((p for p in APP_BUNDLE_CANDIDATES if os.path.isdir(p)), None)
 
 
+def _app_command() -> list[str]:
+    """How to start FlowDownload from this host."""
+    if IS_MAC:
+        bundle = _find_app_bundle()
+        if bundle:
+            # `open -a` launches through the app bundle, so the Dock shows the
+            # real FlowDownload icon -- launching venv/bin/python3 directly (the
+            # fallback below) makes macOS show a bare Python interpreter instead.
+            # If the app is already running it just activates it.
+            return ["open", "-a", bundle]
+    elif getattr(sys, "frozen", False):
+        # Inside an AppImage, re-run the AppImage itself: this host's own
+        # directory is a temporary mount that goes away when the host exits.
+        if os.environ.get("APPIMAGE"):
+            return [os.environ["APPIMAGE"]]
+        # Windows/Linux builds ship the app right next to this host.
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        return [os.path.join(exe_dir, "FlowDownload.exe" if IS_WINDOWS else "FlowDownload")]
+    return [VENV_PYTHON, RUN_SCRIPT]
+
+
 def _open_app() -> None:
-    bundle = _find_app_bundle()
-    if bundle:
-        # `open -a` launches through the app bundle, so the Dock shows the
-        # real FlowDownload icon -- launching venv/bin/python3 directly (the
-        # fallback below) makes macOS show a bare Python interpreter instead.
-        # If the app is already running it just activates it.
-        subprocess.Popen(["open", "-a", bundle], start_new_session=True)
-    else:
-        subprocess.Popen(
-            [VENV_PYTHON, RUN_SCRIPT],
-            cwd=PROJECT_ROOT,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    frozen = getattr(sys, "frozen", False)
+    launch_detached(_app_command(), cwd=None if frozen else PROJECT_ROOT)
 
 
 def launch_app_if_needed() -> None:
@@ -261,6 +271,11 @@ def handle_message(message: dict) -> dict:
 
 
 def main() -> None:
+    if IS_WINDOWS:
+        # Chrome's framing is binary; never let the C runtime translate \n.
+        import msvcrt
+        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
     try:
         message = read_message()
         if message is None:

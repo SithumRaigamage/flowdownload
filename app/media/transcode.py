@@ -9,17 +9,25 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
+
+from app.platform_util import IS_MAC, IS_WINDOWS, run_tool
 
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-FFMPEG_MISSING = "Preview needs ffmpeg — install it with `brew install ffmpeg`, or use Show in Finder"
+if IS_MAC:
+    FFMPEG_MISSING = "Preview needs ffmpeg — install it with `brew install ffmpeg`, or use Show in Finder"
+elif IS_WINDOWS:
+    FFMPEG_MISSING = "Preview needs ffmpeg — install it with `winget install ffmpeg`, or use Show in File Explorer"
+else:
+    FFMPEG_MISSING = "Preview needs ffmpeg — install it with your package manager, or use Show in file manager"
 
 # ffprobe results per transcode cache key (source name+mtime+size): the UI
 # polls once a second, and re-probing every time cost a subprocess each.
@@ -58,7 +66,7 @@ def needs_transcode(path: str) -> bool:
     SUPPORTED_VIDEO = {"vp8", "vp9", "av1"}
     SUPPORTED_AUDIO = {"opus", "vorbis", "pcm_*", "flac"}
     try:
-        out = subprocess.run(
+        out = run_tool(
             [find_binary("ffprobe"), "-v", "error", "-print_format", "json",
              "-show_streams", path],
             capture_output=True, text=True, timeout=5, check=False,
@@ -82,24 +90,30 @@ def needs_transcode(path: str) -> bool:
 
 
 def find_binary(name: str) -> str:
-    """Return the path to an executable, searching well-known macOS Homebrew
+    """Return the path to an executable, searching well-known install
     locations before falling back to a bare name (using PATH from the
     current environment).
 
     macOS GUI apps launched from Finder/Dock run under launchd with a
     minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that excludes Homebrew's
     /opt/homebrew/bin. This helper makes the dist .app bundle find
-    ffmpeg/ffprobe regardless of how it was launched.
+    ffmpeg/ffprobe regardless of how it was launched. On Windows, an
+    ffmpeg.exe dropped next to FlowDownload.exe wins, then PATH (where
+    winget/choco/scoop put it).
     """
-    candidates = [
-        f"/opt/homebrew/bin/{name}",      # Apple Silicon Homebrew
-        f"/usr/local/bin/{name}",         # Intel Homebrew / older installs
-        f"/opt/local/bin/{name}",         # MacPorts
-    ]
+    if IS_WINDOWS:
+        candidates = [os.path.join(os.path.dirname(os.path.abspath(sys.executable)), f"{name}.exe")]
+    else:
+        candidates = [
+            f"/opt/homebrew/bin/{name}",      # Apple Silicon Homebrew
+            f"/usr/local/bin/{name}",         # Intel Homebrew / older installs
+            f"/opt/local/bin/{name}",         # MacPorts
+            f"/usr/bin/{name}",               # Linux distro packages
+        ]
     for path in candidates:
         if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
-    return name  # fallback: let subprocess find it via PATH
+    return shutil.which(name) or name  # fallback: let subprocess find it via PATH
 
 
 def transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> str | None:
@@ -138,7 +152,7 @@ def transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> str |
         dest_path + ".tmp",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=int(duration_s) + 60)
+        result = run_tool(cmd, capture_output=True, timeout=int(duration_s) + 60)
         if result.returncode != 0:
             _log(f"[transcode] ffmpeg failed: {result.stderr.decode(errors='replace')[-500:]}")
             return "This file couldn't be converted for preview"
@@ -164,7 +178,7 @@ def transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> str |
 def probe_duration(path: str) -> float:
     """Return the duration of a media file in seconds, or 0 on error."""
     try:
-        out = subprocess.run(
+        out = run_tool(
             [find_binary("ffprobe"), "-v", "error", "-print_format", "json",
              "-show_format", path],
             capture_output=True, text=True, timeout=5, check=False,

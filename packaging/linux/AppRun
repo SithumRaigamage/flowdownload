@@ -1,0 +1,10 @@
+#!/bin/sh
+# AppImage entry point. Chrome's native host launcher (written by
+# app/chrome_setup.py) re-enters the AppImage with --native-host, since the
+# mount this runs from only exists while the AppImage is running.
+HERE="$(dirname "$(readlink -f "$0")")"
+if [ "$1" = "--native-host" ]; then
+    shift
+    exec "$HERE/usr/lib/flowdownload/flowdownload-host" "$@"
+fi
+exec "$HERE/usr/lib/flowdownload/FlowDownload" "$@"

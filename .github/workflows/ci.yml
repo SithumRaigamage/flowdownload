@@ -4,14 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    # The app is macOS-only (osascript, open, Homebrew paths, .app bundle).
-    runs-on: macos-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-24.04]
+    env:
+      QT_QPA_PLATFORM: offscreen   # QtWebEngine tests render without a display
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,6 +27,12 @@ jobs:
       - uses: actions/setup-node@v4  # runs the extension's background.js in tests/chrome_harness.js
         with:
           node-version: "24"
+      - name: Install Qt runtime libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2t64 libdbus-1-3
       - name: Install pinned dependencies
         run: pip install -r requirements.lock
       - name: Lint
@@ -27,6 +40,7 @@ jobs:
       - name: Tests (engine, API, native host, extension, offscreen UI)
         run: python -m pytest
       - name: Audit dependencies for known vulnerabilities
+        if: runner.os == 'macOS'
         run: |
           pip install pip-audit
           pip-audit -r requirements.lock

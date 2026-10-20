@@ -18,24 +18,24 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+from app import chrome_setup  # noqa: E402
+from app.platform_util import IS_MAC, IS_WINDOWS  # noqa: E402
+
 EXTENSION_DIR = os.path.join(PROJECT_ROOT, "chrome_extension")
 NATIVE_HOST_DIR = os.path.join(PROJECT_ROOT, "native_host")
 KEY_DIR = os.path.join(os.path.expanduser("~"), ".flowdownload")
 PRIVATE_KEY_PATH = os.path.join(KEY_DIR, "chrome_extension_key.pem")
 PUBLIC_KEY_DER_PATH = os.path.join(KEY_DIR, "chrome_extension_key_pub.der")
 
-HOST_NAME = "com.flowdownload.host"
-CHROME_NATIVE_HOSTS_DIR = os.path.join(
-    os.path.expanduser("~"), "Library", "Application Support",
-    "Google", "Chrome", "NativeMessagingHosts",
-)
 
 
 def run(cmd: list[str]) -> None:
@@ -57,8 +57,7 @@ def ensure_keypair() -> bytes:
 
 
 def compute_extension_id(pubkey_der: bytes) -> str:
-    digest = hashlib.sha256(pubkey_der).digest()[:16]
-    return "".join(chr(ord("a") + (b >> 4)) + chr(ord("a") + (b & 0xF)) for b in digest)
+    return chrome_setup.extension_id_from_key(pubkey_der)
 
 
 def write_manifest_key(pubkey_der: bytes) -> None:
@@ -72,12 +71,15 @@ def write_manifest_key(pubkey_der: bytes) -> None:
     print(f"Wrote signing key into {manifest_path}")
 
 
+# Installed macOS bundles. Packaged Windows/Linux builds register their own
+# host on every launch (app/chrome_setup.register_installed_app), so on those
+# this script is only for source checkouts.
 APP_BUNDLE_CANDIDATES = (
     "/Applications/FlowDownload.app",
     os.path.join(os.path.expanduser("~"), "Applications", "FlowDownload.app"),
-)
+) if IS_MAC else ()
 BUNDLED_HOST = os.path.join("Contents", "MacOS", "flowdownload-host")
-SOURCE_LAUNCHER = os.path.join(KEY_DIR, "flowdownload-host")
+SOURCE_LAUNCHER = os.path.join(KEY_DIR, "flowdownload-host.cmd" if IS_WINDOWS else "flowdownload-host")
 
 
 def host_executable(app_bundle: str | None) -> str:
@@ -97,35 +99,27 @@ def host_executable(app_bundle: str | None) -> str:
     host_script = os.path.join(NATIVE_HOST_DIR, "flowdownload_host.py")
     os.makedirs(KEY_DIR, exist_ok=True)
     with open(SOURCE_LAUNCHER, "w") as f:
-        f.write(f'#!/bin/sh\nexec "{sys.executable}" "{host_script}" "$@"\n')
+        if IS_WINDOWS:
+            f.write(f'@echo off\r\n"{sys.executable}" "{host_script}" %*\r\n')
+        else:
+            f.write(f'#!/bin/sh\nexec "{sys.executable}" "{host_script}" "$@"\n')
     os.chmod(SOURCE_LAUNCHER, 0o755)
     return SOURCE_LAUNCHER
 
 
 def register_native_host(extension_id: str, host_path: str) -> None:
-    host_manifest = {
-        "name": HOST_NAME,
-        "description": "FlowDownload native messaging host",
-        "path": host_path,
-        "type": "stdio",
-        "allowed_origins": [f"chrome-extension://{extension_id}/"],
-    }
-    os.makedirs(CHROME_NATIVE_HOSTS_DIR, exist_ok=True)
-    dest = os.path.join(CHROME_NATIVE_HOSTS_DIR, f"{HOST_NAME}.json")
-    with open(dest, "w") as f:
-        json.dump(host_manifest, f, indent=2)
-        f.write("\n")
-    print(f"Registered native messaging host: {dest}")
+    for dest in chrome_setup.register(extension_id, host_path):
+        print(f"Registered native messaging host: {dest}")
     print(f"  -> {host_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--app", help="register the host bundled in this FlowDownload.app "
+    parser.add_argument("--app", help="macOS: register the host bundled in this FlowDownload.app "
                         "(default: an installed one in /Applications or ~/Applications, else this checkout)")
     args = parser.parse_args()
 
-    if subprocess.run(["which", "openssl"], stdout=subprocess.DEVNULL).returncode != 0:
+    if shutil.which("openssl") is None:
         print("openssl not found on PATH -- required to generate the extension key.", file=sys.stderr)
         sys.exit(1)
 

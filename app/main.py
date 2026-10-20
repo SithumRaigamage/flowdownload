@@ -49,6 +49,12 @@ def main() -> None:
         sys.exit(0)
     _log_to_file()  # only after the lock: the running instance owns the log
 
+    # A packaged build points Chrome at its own bundled host every launch, so
+    # the extension works without running any setup script -- and still does
+    # after the app is moved. No-op when running from source.
+    from app.chrome_setup import register_installed_app
+    register_installed_app()
+
     # Imported here, after the lock check, so a losing process exits before
     # paying for PySide6/QtWebEngine's slow import instead of racing it.
     from PySide6.QtCore import QTimer

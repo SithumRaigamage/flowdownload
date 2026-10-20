@@ -534,6 +534,9 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 const TOKEN = "__FLOWDOWNLOAD_TOKEN__";
 const APP_VERSION = "__FLOWDOWNLOAD_VERSION__";
 const KB=1024, MB=KB*1024, GB=MB*1024;
+// The reveal action's wording follows the OS's own file manager.
+const FILE_MANAGER=/Mac/.test(navigator.platform)?"Finder":/Win/.test(navigator.platform)?"File Explorer":"file manager";
+const REVEAL_LABEL="Show in "+FILE_MANAGER;
 
 /* ---------- API ---------- */
 async function api(path, opts){
@@ -761,7 +764,7 @@ function renderSystem(){
     } else if(chromeCache.host_registered){
       text.textContent = "Native host is registered, but no extension is reporting. Reload the extension in Chrome.";
     } else {
-      text.textContent = "Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.";
+      text.textContent = "Not registered. Restart FlowDownload (from a source checkout, run scripts/setup_chrome_integration.py), then reload the extension.";
     }
   }
 }
@@ -926,7 +929,7 @@ function openLibPlayer(id){
       '<div class="lib-player-foot">'+
         '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+esc(d.id)+'">'+
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>'+
-          'Show in Finder'+
+          REVEAL_LABEL+
         '</button>'+
         '<button class="btn btn-outline btn-sm" data-act="copy" data-id="'+esc(d.id)+'">Copy link</button>'+
         '<button class="btn btn-ghost btn-sm" id="libDetailsBtn">View details</button>'+
@@ -1108,7 +1111,7 @@ function openLibPlayer(id){
     mediaEl.onerror=()=>{
       const e=mediaEl.error;
       console.warn("[libPlayer] media error code="+(e?e.code:"null")+" msg="+(e&&e.message));
-      showProblem("This file can't be played here. Use Show in Finder to open it in another app.");
+      showProblem("This file can't be played here. Use "+REVEAL_LABEL+" to open it in another app.");
     };
     mediaEl.style.display="block";
     if(overlay) overlay.style.display="none";
@@ -1409,7 +1412,7 @@ function renderList(){
           (d.state==="downloading"||d.state==="retrying"?'<button class="btn btn-ghost btn-icon" data-act="pause" data-id="'+d.id+'" title="Pause" aria-label="Pause '+esc(d.name)+'">'+PAUSE+'</button>':'')+
           (d.state==="paused"||d.state==="queued"?'<button class="btn btn-ghost btn-icon" data-act="resume" data-id="'+d.id+'" title="Resume" aria-label="Resume '+esc(d.name)+'">'+PLAY+'</button>':'')+
           (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-ghost btn-icon" data-act="retry" data-id="'+d.id+'" title="Retry" aria-label="Retry '+esc(d.name)+'">'+RETRY+'</button>':'')+
-          (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="Show in Finder" aria-label="Show '+esc(d.name)+' in Finder">'+FOLDER+'</button>':'')+
+          (d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="reveal" data-id="'+d.id+'" title="'+REVEAL_LABEL+'" aria-label="Show '+esc(d.name)+' in '+FILE_MANAGER+'">'+FOLDER+'</button>':'')+
           (isMediaDownload(d)&&d.state==="completed"?'<button class="btn btn-ghost btn-icon" data-act="play" data-id="'+d.id+'" title="Preview" aria-label="Preview '+esc(d.name)+'">'+PLAY+'</button>':'')+
           '<button class="btn btn-ghost btn-icon" data-act="menu" data-id="'+d.id+'" title="More" aria-label="More actions for '+esc(d.name)+'">'+DOTS+'</button>'+
         '</div>'+
@@ -1479,7 +1482,7 @@ function renderSheet(){
         'Your browser does not support '+tag+' playback.'+
         '</'+tag+'>'+
         '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
-          '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>'+
+          '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' '+REVEAL_LABEL+'</button>'+
         '</div>';
       // Set src on next tick so the <video>/<audio> exists in the DOM.
       setTimeout(()=>{
@@ -1488,7 +1491,7 @@ function renderSheet(){
       },0);
     } else {
       body='<p style="font-size:12px;color:var(--muted-foreground);margin:0 0 10px">Preview isn\'t available for this file type.</p>'+
-        '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>';
+        '<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' '+REVEAL_LABEL+'</button>';
     }
   }
 
@@ -1506,7 +1509,7 @@ function renderSheet(){
       (d.state==="paused"||d.state==="queued"?'<button class="btn btn-outline btn-sm" data-act="resume" data-id="'+d.id+'">'+PLAY+' Resume</button>':'')+
       (d.state==="failed"||d.state==="cancelled"?'<button class="btn btn-primary btn-sm" data-act="retry" data-id="'+d.id+'">'+RETRY+' Retry</button>':'')+
       (["downloading","retrying","queued","paused"].includes(d.state)?'<button class="btn btn-outline btn-sm" data-act="cancel" data-id="'+d.id+'">Cancel</button>':'')+
-      (d.state==="completed"?'<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' Show in Finder</button>':'')+
+      (d.state==="completed"?'<button class="btn btn-outline btn-sm" data-act="reveal" data-id="'+d.id+'">'+FOLDER+' '+REVEAL_LABEL+'</button>':'')+
       (isMediaDownload(d)?'<button class="btn btn-primary btn-sm" data-act="play" data-id="'+d.id+'">'+PLAY+' Preview</button>':'')+
       '<button class="btn btn-ghost btn-sm" data-act="copy" data-id="'+d.id+'">Copy link</button>'+
     '</div></div>'+
@@ -1581,7 +1584,7 @@ async function act(id,what){
     if(what==="pause") await post("/api/downloads/"+id+"/pause");
     else if(what==="resume") await post("/api/downloads/"+id+"/resume");
     else if(what==="retry") await post("/api/downloads/"+id+"/retry");
-    else if(what==="reveal"){ await post("/api/downloads/"+id+"/reveal"); toast("ok","Revealed in Finder",d.name); }
+    else if(what==="reveal"){ await post("/api/downloads/"+id+"/reveal"); toast("ok","Revealed in "+FILE_MANAGER,d.name); }
     else if(what==="details"){ ui.activeId=id; ui.tab="overview"; render(); }
     else if(what==="copy"){
       try{ await navigator.clipboard.writeText(d.url); toast("ok","Link copied",d.host); }
@@ -1720,7 +1723,7 @@ function openMenu(anchor,id){
   if(d.state==="paused"||d.state==="queued") items.push(["resume","Resume"]);
   if(d.state==="failed"||d.state==="cancelled") items.push(["retry","Retry now"]);
   if(["downloading","retrying","queued","paused"].includes(d.state)) items.push(["cancel","Cancel"]);
-  if(d.state==="completed") items.push(["reveal","Show in Finder"]);
+  if(d.state==="completed") items.push(["reveal",REVEAL_LABEL]);
   if(d.state!=="completed") items.push(["refresh","Refresh link…"]);
   items.push(["copy","Copy source link"]);
   if(isMediaDownload(d) && d.state==="completed") items.push(["play","Preview / Play"]);
@@ -1990,7 +1993,7 @@ function settingsPanes(){
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Applies when the same URL was already completed — from the extension or the Add download dialog.</p>'+
       '</div>',
     Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
-      '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Run scripts/setup_chrome_integration.py, then reload the extension.")+'</p></div>'+
+      '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Restart FlowDownload (from a source checkout, run scripts/setup_chrome_integration.py), then reload the extension.")+'</p></div>'+
       '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
       '<p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Cookies and a browser User-Agent are always forwarded for downloads Chrome hands off, so pages that need you to be logged in keep working.</p>',
     Advanced: '<div style="padding-top:10px;display:flex;gap:7px;flex-wrap:wrap">'+
