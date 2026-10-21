@@ -64,10 +64,14 @@ def main() -> None:
     from app.engine.manager import DownloadManager
     from app.engine.settings import Settings
     from app.engine.storage import Storage
+    from app.ui.macos_window import activate_macos_app
     from app.ui.tray import TrayController, make_app_icon
     from app.ui.web_window import WebMainWindow
 
     app = QApplication(sys.argv)
+    app.setApplicationName("FlowDownload")
+    app.setApplicationDisplayName("FlowDownload")
+    app.setOrganizationName("FlowDownload")
     app.setWindowIcon(make_app_icon(128))  # sets the macOS Dock icon, not just the titlebar
     app.setQuitOnLastWindowClosed(False)  # closing to tray shouldn't end the app
     app.aboutToQuit.connect(lock.release)
@@ -86,6 +90,9 @@ def main() -> None:
     window = WebMainWindow(manager, api_server.page_url)
 
     window.show()
+    window.raise_()
+    window.activateWindow()
+    activate_macos_app(window)
 
     tray = TrayController(window, manager)  # noqa: F841 -- keeps the tray icon alive
 

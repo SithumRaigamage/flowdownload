@@ -56,6 +56,24 @@ def reveal(path: str) -> None:
             pass  # no desktop file manager integration installed
 
 
+def open_url(url: str) -> None:
+    """Open a URL in the user's default browser."""
+    if IS_MAC:
+        subprocess.run(["open", url], check=False)
+    elif IS_WINDOWS:
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]
+        except Exception:
+            subprocess.run(["cmd", "/c", "start", "", url], check=False)
+    else:
+        try:
+            subprocess.Popen(["xdg-open", url], env=subprocess_env(), start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            pass
+
+
+
 _WINDOWS_PICK_FOLDER = (
     "Add-Type -AssemblyName System.Windows.Forms;"
     "$d = New-Object System.Windows.Forms.FolderBrowserDialog;"

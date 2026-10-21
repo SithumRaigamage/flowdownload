@@ -83,13 +83,15 @@ try{ const t=localStorage.getItem("fd-theme")||"system";
 
 /* ---------- base ---------- */
 *,*::before,*::after{box-sizing:border-box}
-html,body{height:100%}
+html,body{height:100%;cursor:default;user-select:none;-webkit-user-select:none}
 body{margin:0;background:var(--background);color:var(--foreground);
   font-family:"Instrument Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
   font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow:hidden}
 .mono{font-family:"DM Mono",ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
 input,select,textarea{font:inherit;color:inherit}
+input:not([readonly]),textarea{cursor:text;user-select:text;-webkit-user-select:text}
+button,select,[role="button"],[role="checkbox"],a,.btn,.pill,.nav,.view-btn,.cb,.switch,.row,.lib-card,.more-item{cursor:pointer}
 :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:6px}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-thumb{background:var(--input);border-radius:99px;border:3px solid transparent;background-clip:content-box}
@@ -209,21 +211,35 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .nav .dot{display:none}
 .nav .count{font-family:"DM Mono",ui-monospace,monospace;font-size:11.5px;opacity:.65}
 .tools-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.search{position:relative;width:240px}
+.search{position:relative;width:220px}
 .search .input{padding-left:36px}
 .search svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted-foreground);pointer-events:none}
 .tb-sep{width:1px;height:20px;background:var(--border);margin:0 2px}
+
+.view-switch{display:inline-flex;align-items:center;background:var(--muted);border:1px solid var(--border);border-radius:18px;padding:2px;gap:2px}
+.view-switch .btn-icon{width:28px;height:28px;border-radius:14px;color:var(--muted-foreground);transition:background .12s,color .12s}
+.view-switch .btn-icon:hover{color:var(--foreground)}
+.view-switch .btn-icon[aria-pressed="true"]{background:var(--card);color:var(--foreground);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+
+.more-wrap{position:relative}
+.more-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:50;min-width:200px;padding:6px;
+  background:var(--popover);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:2px}
+.more-menu.hidden{display:none}
+.more-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;border-radius:8px;
+  font-size:12.5px;font-weight:500;color:var(--foreground);text-align:left;transition:background .1s;cursor:pointer}
+.more-item:hover{background:var(--accent)}
+.more-sep{height:1px;background:var(--border);margin:4px 6px}
 
 .bulkbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 10px;margin-bottom:14px;
   background:var(--card);border:1px solid var(--border);border-radius:20px;font-size:13px}
 .bulkbar b{font-weight:600}
 .bulkbar[data-has-selection="false"] [data-bulk]:not([data-bulk="all"]){pointer-events:none;opacity:.4}
 
-/* ---------- download cards ---------- */
+/* ---------- download cards & list ---------- */
 .list{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px;position:relative}
 .row{position:relative;display:flex;flex-direction:column;gap:12px;min-height:196px;padding:18px;
-  background:var(--card);border:1px solid var(--border);border-radius:24px;cursor:default;
-  transition:box-shadow .15s,border-color .15s}
+  background:var(--card);border:1px solid var(--border);border-radius:24px;cursor:pointer;
+  transition:box-shadow .15s,border-color .15s;overflow:hidden;min-width:0;max-width:100%}
 .row:hover{box-shadow:var(--shadow-md)}
 .row[data-state="failed"]{border-color:color-mix(in srgb,var(--destructive) 38%,var(--border))}
 .row[data-selected="true"]{border-color:var(--foreground)}
@@ -244,11 +260,33 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .rstatus{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:auto}
 .rmeta{display:flex;gap:8px;font-family:"DM Mono",ui-monospace,monospace;font-size:12px;color:var(--muted-foreground)}
 .rspeed,.reta{font-weight:400}
-.rbot{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;color:var(--muted-foreground);min-height:17px}
+.rbot{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12px;color:var(--muted-foreground);min-height:17px;min-width:0;max-width:100%;overflow:hidden}
 .rbot .sep{opacity:.45}
-.rerr{color:var(--destructive)}
+.rerr{color:var(--destructive);word-break:break-word;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;max-width:100%;line-height:1.35;padding:3px 8px;border-radius:8px;background:color-mix(in srgb,var(--destructive) 10%,transparent);border:1px solid color-mix(in srgb,var(--destructive) 25%,transparent)}
+.rerr[data-state="retrying"]{color:var(--warning);background:color-mix(in srgb,var(--warning) 10%,transparent);border-color:color-mix(in srgb,var(--warning) 25%,transparent)}
 .ractions{display:flex;gap:4px;opacity:0;transition:opacity .12s}
 .row:hover .ractions,.row[data-active="true"] .ractions,.row:focus-within .ractions{opacity:1}
+
+/* View Mode: List */
+.list.view-list{display:flex;flex-direction:column;gap:8px}
+.list.view-list .row{min-height:unset;height:auto;padding:10px 14px;flex-direction:row;align-items:center;gap:12px;border-radius:14px}
+.list.view-list .rhead{display:flex;align-items:center;gap:10px;flex:none}
+.list.view-list .rhead .cb{position:static;opacity:1;background:transparent;box-shadow:none}
+.list.view-list .ficon{width:32px;height:32px;font-size:10px;border-radius:9px}
+.list.view-list .mring{width:32px;height:32px;margin-left:0}
+.list.view-list .mring span{inset:3px;font-size:9px}
+.list.view-list .rmain{flex:1 1 200px;min-width:0;gap:2px}
+.list.view-list .fname{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.list.view-list .fhost{font-size:11px}
+.list.view-list .rstatus{margin-top:0;flex:none;display:flex;align-items:center;gap:10px}
+.list.view-list .rbot{flex:0 1 240px;min-width:0;max-width:240px;overflow:hidden;font-size:11.5px;gap:4px}
+.list.view-list .ractions{opacity:0;transition:opacity .12s;flex:none;margin-left:auto}
+.list.view-list .row:hover .ractions,.list.view-list .row[data-active="true"] .ractions,.list.view-list .row:focus-within .ractions{opacity:1}
+
+/* Compact Density */
+.list.compact{gap:8px}
+.list.compact .row{padding:12px;min-height:160px}
+.list.view-list.compact .row{padding:6px 12px;border-radius:10px}
 
 .segbar{position:relative;height:6px;border-radius:99px;background:var(--track);overflow:hidden}
 .segbar i{position:absolute;top:0;left:0;height:100%;background:var(--foreground);transition:width .28s linear}
@@ -417,7 +455,44 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .shortcuts .g{grid-column:1/-1;font-size:12px;font-weight:600;color:var(--muted-foreground);margin-top:10px}
 .shortcuts .g:first-child{margin-top:0}
 
+/* ---------- about & feature items ---------- */
+.about-pane{display:flex;flex-direction:column;gap:12px;padding-top:4px}
+.about-version-header{text-align:center;padding:4px 0 2px;font-size:13px;color:var(--muted-foreground);font-weight:500}
+.about-update-btn{width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
+  background:var(--secondary);border:1px solid var(--border);border-radius:18px;color:var(--foreground);
+  font-size:13.5px;font-weight:500;cursor:pointer;transition:background .12s,border-color .12s}
+.about-update-btn:hover{background:var(--accent)}
+.about-group{background:var(--secondary);border:1px solid var(--border);border-radius:20px;overflow:hidden;display:flex;flex-direction:column}
+.about-item{width:100%;display:flex;align-items:center;gap:12px;padding:13px 16px;background:transparent;
+  border:0;border-bottom:1px solid var(--border);color:var(--foreground);font-size:13.5px;font-weight:500;
+  text-align:left;cursor:pointer;transition:background .12s}
+.about-item:last-child{border-bottom:0}
+.about-item:hover{background:var(--accent)}
+.about-icon{width:22px;height:22px;display:flex;align-items:center;justify-content:center;flex:none;font-size:15px}
+.about-label{flex:1;min-width:0}
+.about-chevron{color:var(--muted-foreground);display:flex;align-items:center;flex:none}
+.about-footer{margin-top:18px;margin-bottom:6px;text-align:center;font-size:12.5px;color:var(--muted-foreground);line-height:1.5}
+.about-footer b{color:var(--foreground)}
+
+/* Onboarding Tour */
+.onboarding-wrap{display:flex;flex-direction:column;align-items:center;text-align:center;padding:12px 6px}
+.onboarding-art{width:70px;height:70px;border-radius:22px;background:var(--muted);display:grid;place-items:center;margin-bottom:16px;font-size:30px;color:var(--foreground)}
+.onboarding-title{font-size:18px;font-weight:700;margin:0 0 8px;letter-spacing:-.01em}
+.onboarding-desc{font-size:13px;color:var(--muted-foreground);line-height:1.5;max-width:380px;margin:0 0 20px}
+.onboarding-dots{display:flex;gap:6px;margin-bottom:18px}
+.onboarding-dot{width:8px;height:8px;border-radius:50%;background:var(--border);transition:all .15s}
+.onboarding-dot.active{width:22px;border-radius:4px;background:var(--foreground)}
+
+/* Allowlist items */
+.allowlist-list{display:flex;flex-direction:column;gap:10px;max-height:360px;overflow-y:auto;padding-right:4px}
+.allowlist-card{padding:12px 14px;background:var(--secondary);border:1px solid var(--border);border-radius:14px}
+.allowlist-card h4{margin:0 0 6px;font-size:13px;font-weight:600}
+.allowlist-card p{margin:0 0 8px;font-size:12px;color:var(--muted-foreground);line-height:1.4}
+.allowlist-tags{display:flex;flex-wrap:wrap;gap:6px}
+.allowlist-tag{padding:3px 8px;background:var(--card);border:1px solid var(--border);border-radius:8px;font-family:"DM Mono",monospace;font-size:11px}
+
 .hidden{display:none !important}
+@keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms !important;transition-duration:.001ms !important}}
 @media (max-width:760px){.page{padding:20px 16px 128px}.top h1{font-size:32px}.search{width:100%}.tools-right{margin-left:0;width:100%}}
 </style>
@@ -433,7 +508,7 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
     </header>
 
     <div id="dlView">
-      <div class="bento">
+      <div class="bento" id="bentoGrid">
         <section class="card hero" id="hero" aria-label="Top download"></section>
 
         <section class="card speedcard" aria-label="Total speed">
@@ -474,6 +549,27 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
             <option value="speed">Fastest</option>
             <option value="progress">Progress</option>
           </select>
+          <div class="view-switch" role="group" aria-label="View mode">
+            <button class="btn btn-sm btn-icon" id="viewTilesBtn" data-layout="tiles" title="Tiles view" aria-label="Tiles view" aria-pressed="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            </button>
+            <button class="btn btn-sm btn-icon" id="viewListBtn" data-layout="list" title="List view" aria-label="List view" aria-pressed="false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="more-wrap">
+            <button class="btn btn-sm btn-icon btn-ghost" id="viewMoreBtn" title="More options" aria-label="More options" aria-haspopup="true" aria-expanded="false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+            </button>
+            <div class="more-menu hidden" id="viewMoreMenu" role="menu">
+              <button class="more-item" id="moreCompactBtn" role="menuitem"><span>Compact density</span><span class="mono" id="moreCompactCheck">Off</span></button>
+              <button class="more-item" id="moreSpeedChartBtn" role="menuitem"><span>Speed monitor</span><span class="mono" id="moreSpeedChartCheck">On</span></button>
+              <div class="more-sep"></div>
+              <button class="more-item" id="moreSelectAllBtn" role="menuitem">Select all</button>
+              <button class="more-item" id="moreCopyLinksBtn" role="menuitem">Copy all URLs</button>
+              <button class="more-item" id="moreClearCompletedBtn" role="menuitem">Clear completed</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -533,6 +629,8 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 "use strict";
 const TOKEN = "__FLOWDOWNLOAD_TOKEN__";
 const APP_VERSION = "__FLOWDOWNLOAD_VERSION__";
+const APP_BUILD = "__FLOWDOWNLOAD_BUILD__";
+const APP_BUILD_DATE = "__FLOWDOWNLOAD_BUILD_DATE__";
 const KB=1024, MB=KB*1024, GB=MB*1024;
 // The reveal action's wording follows the OS's own file manager.
 const FILE_MANAGER=/Mac/.test(navigator.platform)?"Finder":/Win/.test(navigator.platform)?"File Explorer":"file manager";
@@ -564,7 +662,10 @@ let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, not
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
-const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all"};
+const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all",
+  layout:(()=>{ try{ return localStorage.getItem("fd-layout")||"tiles"; }catch(_){ return "tiles"; } })(),
+  compact:(()=>{ try{ return localStorage.getItem("fd-compact")==="true"; }catch(_){ return false; } })(),
+  showSpeedChart:(()=>{ try{ return localStorage.getItem("fd-speed-chart")!=="false"; }catch(_){ return true; } })()};
 const thumbCache=new Map(); // id -> dataURL
 const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg","mp3","wav","aac","m4a","flac","ogg","opus","m4b"];
 // Slot bounds: shared by the toolbar +/- buttons and the Settings dialog so
@@ -1251,15 +1352,19 @@ function waitReason(d){
 const looksExpired = d => d.state==="failed" && /\b(403|410)\b/.test(d.error||"");
 
 function rbotHTML(d){
-  if((d.state==="failed"||d.state==="retrying") && d.error)
-    return '<span class="rerr" style="color:'+(d.state==="failed"?"var(--destructive)":"var(--warning)")+'">'+esc(d.error)+'</span>'+
+  if((d.state==="failed"||d.state==="retrying") && d.error){
+    const fullErr = String(d.error);
+    const isFail = d.state === "failed";
+    const clr = isFail ? "var(--destructive)" : "var(--warning)";
+    return '<span class="rerr" data-state="'+d.state+'" title="'+esc(fullErr)+'" style="color:'+clr+'">'+esc(fullErr)+'</span>'+
       (looksExpired(d)?'<span class="sep">·</span><span>Link may have expired — right-click → Refresh link</span>':'');
+  }
   const showWarnAcceptRanges = ["downloading","retrying","paused"].includes(d.state) && d.size>0 && !d.acceptRanges;
   const reason = waitReason(d);
   return '<span class="mono">'+fmtBytes(d.received)+' of '+fmtBytes(d.size)+'</span>'+
     '<span class="sep">·</span><span>'+Math.round(pct(d)*100)+'%</span>'+
     (showWarnAcceptRanges?'<span class="sep">·</span><span style="color:var(--warning)">no resume</span>':'')+
-    (reason?'<span class="sep">·</span><span>'+esc(reason)+'</span>':'');
+    (reason?'<span class="sep">·</span><span title="'+esc(reason)+'">'+esc(reason)+'</span>':'');
 }
 
 function segbarHTML(d){
@@ -1379,11 +1484,25 @@ const PAUSE='<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"
 const RETRY='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>';
 const FOLDER='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
 const DOTS='<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>';
+const CHEVRON_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+const REFRESH_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>';
+const REPLAY_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+
 
 function renderList(){
   const list=document.getElementById("list");
   const items=visible();
   list.dataset.anyselected = ui.selected.size>0;
+
+  const isList = ui.layout === "list";
+  list.classList.toggle("view-list", isList);
+  list.classList.toggle("view-tiles", !isList);
+  list.classList.toggle("compact", !!ui.compact);
+
+  const btnTiles = document.getElementById("viewTilesBtn");
+  const btnList = document.getElementById("viewListBtn");
+  if(btnTiles) btnTiles.setAttribute("aria-pressed", String(!isList));
+  if(btnList) btnList.setAttribute("aria-pressed", String(isList));
 
   if(!items.length){
     list.innerHTML='<div class="empty"><div class="ring">'+
@@ -1401,7 +1520,7 @@ function renderList(){
         '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
         miniRingHTML(d)+
       '</div>'+
-      '<div class="rmain"><span class="fname">'+esc(d.name)+'</span><span class="fhost mono">'+esc(d.host)+'</span></div>'+
+      '<div class="rmain"><span class="fname" title="'+esc(d.name)+'">'+esc(d.name)+'</span><span class="fhost mono">'+esc(d.host)+'</span></div>'+
       '<div class="rstatus">'+
         '<span class="badge badge-'+d.state+'">'+d.state[0].toUpperCase()+d.state.slice(1)+'</span>'+
         '<div class="rmeta">'+rowMeta(d)+'</div>'+
@@ -1739,6 +1858,81 @@ function closeMenu(){ const m=document.getElementById("ctxmenu"); if(m) m.remove
 document.addEventListener("click",e=>{ if(!e.target.closest("#ctxmenu")&&!e.target.closest('[data-act="menu"]')) closeMenu(); });
 
 /* ---------- toolbar ---------- */
+function switchLayout(mode){
+  ui.layout = mode;
+  try{ localStorage.setItem("fd-layout", mode); }catch(_){}
+  renderList();
+}
+function switchView(view){
+  setView(view);
+}
+function toggleDensity(){
+  ui.compact = !ui.compact;
+  try{ localStorage.setItem("fd-compact", String(ui.compact)); }catch(_){}
+  const chk = document.getElementById("moreCompactCheck");
+  if(chk) chk.textContent = ui.compact ? "On" : "Off";
+  renderList();
+}
+function toggleSpeedChart(){
+  ui.showSpeedChart = !ui.showSpeedChart;
+  try{ localStorage.setItem("fd-speed-chart", String(ui.showSpeedChart)); }catch(_){}
+  const chk = document.getElementById("moreSpeedChartCheck");
+  if(chk) chk.textContent = ui.showSpeedChart ? "On" : "Off";
+  const bg = document.getElementById("bentoGrid");
+  if(bg) bg.style.display = ui.showSpeedChart ? "" : "none";
+}
+function showAbout(){
+  settingsDialog("About");
+}
+
+document.getElementById("viewTilesBtn")?.addEventListener("click", () => switchLayout("tiles"));
+document.getElementById("viewListBtn")?.addEventListener("click", () => switchLayout("list"));
+
+const moreBtn = document.getElementById("viewMoreBtn");
+const moreMenu = document.getElementById("viewMoreMenu");
+if(moreBtn && moreMenu){
+  moreBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isHidden = moreMenu.classList.contains("hidden");
+    moreMenu.classList.toggle("hidden", !isHidden);
+    moreBtn.setAttribute("aria-expanded", String(isHidden));
+  });
+  document.addEventListener("click", (e) => {
+    if(!e.target.closest(".more-wrap")){
+      moreMenu.classList.add("hidden");
+      moreBtn.setAttribute("aria-expanded", "false");
+    }
+  });
+}
+
+document.getElementById("moreCompactBtn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleDensity();
+});
+document.getElementById("moreSpeedChartBtn")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  toggleSpeedChart();
+});
+document.getElementById("moreSelectAllBtn")?.addEventListener("click", () => {
+  toggleSelectAll();
+  moreMenu?.classList.add("hidden");
+});
+document.getElementById("moreCopyLinksBtn")?.addEventListener("click", async () => {
+  moreMenu?.classList.add("hidden");
+  const urls = visible().map(d => d.url).filter(Boolean);
+  if(!urls.length){ toast("warn", "No downloads to copy"); return; }
+  try {
+    await navigator.clipboard.writeText(urls.join("\n"));
+    toast("ok", "Copied " + urls.length + " URLs to clipboard");
+  } catch(err) {
+    toast("err", "Failed to copy links", err.message);
+  }
+});
+document.getElementById("moreClearCompletedBtn")?.addEventListener("click", () => {
+  moreMenu?.classList.add("hidden");
+  document.getElementById("removeAllBtn")?.click();
+});
+
 document.getElementById("search").addEventListener("input",e=>{ui.query=e.target.value;renderList()});
 document.getElementById("sort").addEventListener("change",e=>{ui.sort=e.target.value;renderList()});
 document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
@@ -2000,27 +2194,62 @@ function settingsPanes(){
       '<button class="btn btn-outline btn-sm" id="setClearCompleted">Clear completed</button>'+
       '<button class="btn btn-outline btn-sm" style="color:var(--destructive)" id="setResetAll">Reset all settings</button>'+
       '</div><p style="margin-top:10px;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Partial downloads are always kept on disk after a failure or pause, so a resume days later just picks up where it left off.</p>',
-    About: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>FlowDownload</div><p>Resumable download manager for macOS</p></div>'+
-      '<span class="badge mono">v'+esc(APP_VERSION)+'</span></div>'+
-      '<div class="setrow"><div class="txt"><div>Data folder</div><p class="mono">~/.flowdownload</p></div></div>'
+    About: '<div class="about-pane">'+
+      '<div class="about-version-header">v'+esc(APP_VERSION)+' '+esc(APP_BUILD)+'</div>'+
+      '<button class="about-update-btn" id="aboutCheckUpdates" type="button">'+
+        '<span style="display:flex;align-items:center;gap:10px">'+
+          '<span class="about-icon" id="updateIconSvg">'+REFRESH_SVG+'</span>'+
+          '<span id="updateBtnLabel">Check for updates</span>'+
+        '</span>'+
+        '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+      '</button>'+
+      '<div class="about-group">'+
+        '<button class="about-item" id="aboutAllowlistBtn" type="button">'+
+          '<span class="about-icon mono" style="font-size:12px;font-weight:700">&lt;/&gt;</span>'+
+          '<span class="about-label">View the full allowlist</span>'+
+          '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+        '</button>'+
+        '<button class="about-item" id="aboutReportBugBtn" type="button">'+
+          '<span class="about-icon">🪲</span>'+
+          '<span class="about-label">Report a bug</span>'+
+          '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+        '</button>'+
+        '<button class="about-item" id="aboutRequestFeatureBtn" type="button">'+
+          '<span class="about-icon">💡</span>'+
+          '<span class="about-label">Request a feature</span>'+
+          '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+        '</button>'+
+        '<button class="about-item" id="aboutReplayOnboardingBtn" type="button">'+
+          '<span class="about-icon">'+REPLAY_SVG+'</span>'+
+          '<span class="about-label">Replay onboarding</span>'+
+          '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+        '</button>'+
+        '<button class="about-item" id="aboutBuyCoffeeBtn" type="button">'+
+          '<span class="about-icon">☕</span>'+
+          '<span class="about-label">Buy me a coffee</span>'+
+          '<span class="about-chevron">'+CHEVRON_SVG+'</span>'+
+        '</button>'+
+      '</div>'+
+      '<div class="about-footer">'+
+        '<div>Made with <span style="color:#e25555">❤️</span> by <b>Sithum Raigamage</b></div>'+
+        '<div style="font-size:11.5px;opacity:0.8;margin-top:2px">v'+esc(APP_VERSION)+' '+esc(APP_BUILD)+(APP_BUILD_DATE ? ' · '+esc(APP_BUILD_DATE) : '')+'</div>'+
+      '</div>'+
+    '</div>'
   };
 }
 
-async function settingsDialog(){
-  // Both fall back to whatever's already cached on failure (better than a
-  // blank dialog), but that fallback used to be silent -- a failed load
-  // looked identical to a successful one, so a stale/broken settings view
-  // gave no indication anything was wrong.
+async function settingsDialog(initialTab = "General"){
   try{ settingsCache=await getJSON("/api/settings"); }
   catch(err){ toast("err","Couldn't load settings",err.message); }
   try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
   const tabs=["General","Downloads","Chrome","Advanced","About"];
+  const startTab = tabs.includes(initialTab) ? initialTab : "General";
   const panes=settingsPanes();
 
   const dlg=overlay('<div class="dialog" style="max-width:540px" role="dialog" aria-modal="true" aria-labelledby="setTitle">'+
     '<div class="dialog-head"><h2 id="setTitle">Settings</h2></div>'+
-    '<div class="tabs" style="padding:0 17px" role="tablist">'+tabs.map((t,i)=>'<button class="tab" role="tab" data-st="'+t+'" aria-selected="'+(i===0)+'">'+t+'</button>').join("")+'</div>'+
-    '<div class="dialog-body" id="setPane" style="padding-top:4px">'+panes.General+'</div>'+
+    '<div class="tabs" style="padding:0 17px" role="tablist">'+tabs.map(t=>'<button class="tab" role="tab" data-st="'+t+'" aria-selected="'+(t===startTab)+'">'+t+'</button>').join("")+'</div>'+
+    '<div class="dialog-body" id="setPane" style="padding-top:4px">'+panes[startTab]+'</div>'+
     '<div class="dialog-foot"><button class="btn btn-primary" data-close>Done</button></div></div>');
 
   function wirePane(){
@@ -2073,10 +2302,6 @@ async function settingsDialog(){
     if(clearBtn) clearBtn.onclick=async()=>{
       try{
         const r=await post("/api/downloads/clear-completed");
-        // Mirror removeAllBtn's local cleanup -- the server call alone
-        // doesn't touch the in-memory `downloads` array, so without this
-        // cleared items stayed visible in the list until an unrelated
-        // event happened to trigger a re-render.
         const completed=downloads.filter(d=>d.state==="completed");
         downloads=downloads.filter(d=>d.state!=="completed");
         completed.forEach(d=>thumbCache.delete(d.id));
@@ -2091,6 +2316,55 @@ async function settingsDialog(){
       try{ settingsCache=await post("/api/settings/reset"); refreshTab(); toast("ok","Settings reset to defaults"); render(); }
       catch(err){ toast("err","Couldn't reset settings",err.message); }
     };
+
+    // About tab feature wire-ups
+    const checkUpdatesBtn=dlg.querySelector("#aboutCheckUpdates");
+    if(checkUpdatesBtn){
+      checkUpdatesBtn.onclick=async()=>{
+        const icon=dlg.querySelector("#updateIconSvg");
+        const label=dlg.querySelector("#updateBtnLabel");
+        if(checkUpdatesBtn.disabled) return;
+        checkUpdatesBtn.disabled=true;
+        if(icon) icon.innerHTML='<span style="display:inline-block;animation:spin 0.8s linear infinite">'+REFRESH_SVG+'</span>';
+        if(label) label.textContent="Checking for updates…";
+        try{
+          const update=await getJSON("/api/update-check");
+          if(update.update_available){
+            if(icon) icon.innerHTML='<span style="color:var(--foreground)">↑</span>';
+            if(label) label.textContent="Open update (v"+esc(update.latest_version)+")";
+            toast("info","Update available","FlowDownload v"+esc(update.latest_version)+" is ready");
+            checkUpdatesBtn.onclick=()=>post("/api/open-url",{url:update.release_url})
+              .then(()=>toast("info","Opening release page"))
+              .catch(err=>toast("err","Couldn't open release page",err.message));
+            checkUpdatesBtn.disabled=false;
+          }else{
+            if(icon) icon.innerHTML='<span style="color:var(--foreground)">✓</span>';
+            if(label) label.textContent="You're on the latest version (v"+esc(update.current_version)+")";
+            toast("ok","Up to date","FlowDownload v"+esc(update.current_version)+" is the latest version");
+          }
+        }catch(err){
+          if(icon) icon.innerHTML='<span style="color:var(--destructive)">!</span>';
+          if(label) label.textContent="Couldn't check for updates";
+          toast("err","Couldn't check for updates",err.message);
+        }
+        setTimeout(()=>{
+          if(icon) icon.innerHTML=REFRESH_SVG;
+          if(label) label.textContent="Check for updates";
+          checkUpdatesBtn.disabled=false;
+          wirePane();
+        },3000);
+      };
+    }
+    const allowlistBtn=dlg.querySelector("#aboutAllowlistBtn");
+    if(allowlistBtn) allowlistBtn.onclick=allowlistDialog;
+    const reportBugBtn=dlg.querySelector("#aboutReportBugBtn");
+    if(reportBugBtn) reportBugBtn.onclick=reportBugDialog;
+    const reqFeatBtn=dlg.querySelector("#aboutRequestFeatureBtn");
+    if(reqFeatBtn) reqFeatBtn.onclick=requestFeatureDialog;
+    const replayObBtn=dlg.querySelector("#aboutReplayOnboardingBtn");
+    if(replayObBtn) replayObBtn.onclick=()=>{ closeOverlay(); onboardingDialog(); };
+    const buyCoffeeBtn=dlg.querySelector("#aboutBuyCoffeeBtn");
+    if(buyCoffeeBtn) buyCoffeeBtn.onclick=buyCoffeeDialog;
   }
   function refreshTab(){
     const active=dlg.querySelector("[data-st][aria-selected='true']").dataset.st;
@@ -2110,6 +2384,193 @@ async function settingsDialog(){
       catch(err){ sw.setAttribute("aria-checked",!newVal); toast("err","Couldn't save setting",err.message); }
     }
   });
+}
+
+function allowlistDialog(){
+  overlay('<div class="dialog" style="max-width:540px" role="dialog" aria-modal="true" aria-labelledby="allowlistTitle">'+
+    '<div class="dialog-head"><h2 id="allowlistTitle">&lt;/&gt; Extension &amp; Host Allowlist</h2>'+
+    '<p>File types, protocols, and intercepted hosts managed by FlowDownload.</p></div>'+
+    '<div class="dialog-body"><div class="allowlist-list">'+
+      '<div class="allowlist-card"><h4>Supported Protocols</h4>'+
+        '<p>All network traffic via standard encrypted and unencrypted web protocols.</p>'+
+        '<div class="allowlist-tags"><span class="allowlist-tag">https://</span><span class="allowlist-tag">http://</span></div></div>'+
+      '<div class="allowlist-card"><h4>Video Media</h4>'+
+        '<p>Streamable and high-definition video formats intercepted automatically.</p>'+
+        '<div class="allowlist-tags">'+VIDEO_EXTENSIONS.map(e=>'<span class="allowlist-tag">.'+e+'</span>').join("")+'</div></div>'+
+      '<div class="allowlist-card"><h4>Audio Media</h4>'+
+        '<p>Lossless and compressed audio files routed to library.</p>'+
+        '<div class="allowlist-tags">'+AUDIO_EXTENSIONS.map(e=>'<span class="allowlist-tag">.'+e+'</span>').join("")+'</div></div>'+
+      '<div class="allowlist-card"><h4>Compressed Archives &amp; Installers</h4>'+
+        '<p>Multi-gigabyte software packages and archive formats.</p>'+
+        '<div class="allowlist-tags">'+["zip","dmg","pkg","tar","gz","7z","iso","rar","bz2"].map(e=>'<span class="allowlist-tag">.'+e+'</span>').join("")+'</div></div>'+
+      '<div class="allowlist-card"><h4>Browser Interception Rules</h4>'+
+        '<p>Chrome extension hands off matching downloads to the native host IPC channel without interrupting browsing.</p>'+
+        '<div class="allowlist-tags"><span class="allowlist-tag">Chrome Native Host</span><span class="allowlist-tag">Cookie Preservation</span><span class="allowlist-tag">Session Auth</span></div></div>'+
+    '</div></div>'+
+    '<div class="dialog-foot"><button class="btn btn-primary" data-close>Close</button></div></div>');
+}
+
+function reportBugDialog(){
+  const diag = "FlowDownload v" + (APP_VERSION||"dev") + " " + (APP_BUILD||"dev") + "\n" +
+    (APP_BUILD_DATE ? "Build date: " + APP_BUILD_DATE + "\n" : "") +
+    "Platform: " + navigator.platform + "\n" +
+    "User Agent: " + navigator.userAgent + "\n" +
+    "Concurrent Downloads: " + settingsCache.max_concurrent_downloads + "\n" +
+    "Download Folder: " + settingsCache.download_dir;
+  const dlg = overlay('<div class="dialog" style="max-width:500px" role="dialog" aria-modal="true" aria-labelledby="bugTitle">'+
+    '<div class="dialog-head"><h2 id="bugTitle">🪲 Report a Bug</h2>'+
+    '<p>Found a bug or unexpected behavior? We appreciate your feedback.</p></div>'+
+    '<div class="dialog-body">'+
+      '<div class="field"><label class="label">System &amp; App Diagnostics</label>'+
+      '<textarea class="input mono" readonly style="height:100px;font-size:11px;resize:none;padding:8px 12px">'+esc(diag)+'</textarea></div>'+
+      '<p style="font-size:12px;color:var(--muted-foreground);line-height:1.45;margin:0">You can copy your diagnostic info and report the issue on GitHub, or inspect your log file in <span class="mono">~/.flowdownload/flowdownload.log</span>.</p>'+
+    '</div>'+
+    '<div class="dialog-foot">'+
+      '<button class="btn btn-outline" id="bugCopyDiag">Copy Diagnostics</button>'+
+      '<button class="btn btn-primary" id="bugOpenGithub">Open GitHub Issues</button>'+
+    '</div></div>');
+
+  dlg.querySelector("#bugCopyDiag").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(diag);
+      toast("ok", "Diagnostics copied to clipboard");
+    } catch (_) {
+      toast("err", "Failed to copy diagnostics");
+    }
+  };
+  dlg.querySelector("#bugOpenGithub").onclick = async () => {
+    try {
+      await post("/api/open-url", {url: "https://github.com/SithumRaigamage/flowdownload/issues/new"});
+      toast("info", "Opening GitHub Issues in browser");
+    } catch (_) {
+      toast("err", "Couldn't open browser");
+    }
+  };
+}
+
+function requestFeatureDialog(){
+  const dlg = overlay('<div class="dialog" style="max-width:500px" role="dialog" aria-modal="true" aria-labelledby="featTitle">'+
+    '<div class="dialog-head"><h2 id="featTitle">💡 Request a Feature</h2>'+
+    '<p>Have an idea or enhancement you would love to see in FlowDownload?</p></div>'+
+    '<div class="dialog-body">'+
+      '<div class="field"><label class="label" for="featDesc">Feature Idea</label>'+
+      '<textarea class="input" id="featDesc" placeholder="Describe your feature idea or enhancement…" style="height:110px;resize:none;padding:10px 12px;border-radius:14px"></textarea></div>'+
+      '<div style="font-size:12px;color:var(--muted-foreground);line-height:1.45">'+
+        'Popular ideas: Bandwidth speed scheduling, Safari &amp; Firefox extensions, Torrent support, Custom webhook notifications.'+
+      '</div>'+
+    '</div>'+
+    '<div class="dialog-foot">'+
+      '<button class="btn btn-outline" data-close>Cancel</button>'+
+      '<button class="btn btn-primary" id="featSubmitBtn">Submit on GitHub</button>'+
+    '</div></div>');
+
+  dlg.querySelector("#featSubmitBtn").onclick = async () => {
+    const text = dlg.querySelector("#featDesc").value.trim();
+    const url = "https://github.com/SithumRaigamage/flowdownload/discussions/new?category=ideas" +
+      (text ? "&title=" + encodeURIComponent(text.slice(0, 60)) + "&body=" + encodeURIComponent(text) : "");
+    try {
+      await post("/api/open-url", {url});
+      toast("ok", "Opening GitHub Discussions");
+      closeOverlay();
+    } catch (_) {
+      toast("err", "Couldn't open browser");
+    }
+  };
+}
+
+function onboardingDialog(){
+  let step = 0;
+  const steps = [
+    {
+      art: "⚡",
+      title: "Turbocharged Multi-Threaded Engine",
+      desc: "FlowDownload accelerates large downloads by splitting them into up to 8 parallel pieces, saturating your bandwidth and resuming gracefully across network drops."
+    },
+    {
+      art: "🌐",
+      title: "Seamless Chrome Integration",
+      desc: "Captures web downloads instantly with full session cookies and HTTP headers preserved, so downloads that require login keep working smoothly."
+    },
+    {
+      art: "🎛️",
+      title: "Tiles & Compact List Views",
+      desc: "Customize your workspace with Bento cards or a high-density List layout. Monitor live speeds, remaining ETA, and adjust concurrent download slots with one click."
+    },
+    {
+      art: "🎬",
+      title: "Instant In-App Media Player",
+      desc: "Built-in transcoding enables seamless previewing of audio and video downloads on the fly without waiting for large files to finish."
+    }
+  ];
+
+  function renderStep(dlg){
+    const s = steps[step];
+    dlg.querySelector("#obArt").textContent = s.art;
+    dlg.querySelector("#obTitle").textContent = s.title;
+    dlg.querySelector("#obDesc").textContent = s.desc;
+    dlg.querySelectorAll(".onboarding-dot").forEach((d, i) => d.classList.toggle("active", i === step));
+    dlg.querySelector("#obBack").style.visibility = step === 0 ? "hidden" : "visible";
+    dlg.querySelector("#obNext").textContent = step === steps.length - 1 ? "Get Started" : "Next";
+  }
+
+  const dlg = overlay('<div class="dialog" style="max-width:460px" role="dialog" aria-modal="true" aria-labelledby="obTitle">'+
+    '<div class="dialog-body" style="padding-top:28px">'+
+      '<div class="onboarding-wrap">'+
+        '<div class="onboarding-art" id="obArt">⚡</div>'+
+        '<h3 class="onboarding-title" id="obTitle">Turbocharged Multi-Threaded Engine</h3>'+
+        '<p class="onboarding-desc" id="obDesc">FlowDownload accelerates large downloads by splitting them into up to 8 parallel pieces.</p>'+
+        '<div class="onboarding-dots">'+steps.map(()=>'<span class="onboarding-dot"></span>').join("")+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="dialog-foot" style="justify-content:space-between">'+
+      '<button class="btn btn-outline" id="obBack">Back</button>'+
+      '<button class="btn btn-primary" id="obNext">Next</button>'+
+    '</div></div>');
+
+  renderStep(dlg);
+  dlg.querySelector("#obBack").onclick = () => { if(step > 0){ step--; renderStep(dlg); } };
+  dlg.querySelector("#obNext").onclick = () => {
+    if(step < steps.length - 1){ step++; renderStep(dlg); }
+    else { closeOverlay(); toast("ok", "Welcome to FlowDownload!"); }
+  };
+}
+
+function buyCoffeeDialog(){
+  const dlg = overlay('<div class="dialog" style="max-width:460px" role="dialog" aria-modal="true" aria-labelledby="coffeeTitle">'+
+    '<div class="dialog-head"><h2 id="coffeeTitle">☕ Buy Me a Coffee</h2>'+
+    '<p>Support ongoing development of FlowDownload.</p></div>'+
+    '<div class="dialog-body">'+
+      '<div style="text-align:center;padding:12px 10px 16px">'+
+        '<div style="font-size:36px;margin-bottom:12px">☕</div>'+
+        '<p style="font-size:13.5px;line-height:1.55;color:var(--foreground);margin:0 0 14px">'+
+          'FlowDownload is developed with ❤️ as an independent, ad-free download manager for macOS.<br>'+
+          'If FlowDownload saves you time, buying a coffee is a great way to say thanks and support future features!'+
+        '</p>'+
+        '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'+
+          '<button class="btn btn-primary" id="coffeeOpenBtn" style="padding:0 20px">Support on Buy Me a Coffee</button>'+
+          '<button class="btn btn-outline" id="coffeeCopyBtn">Copy Link</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="dialog-foot"><button class="btn btn-outline" data-close>Close</button></div></div>');
+
+  const coffeeUrl = "https://buymeacoffee.com/sithumraigamage";
+  dlg.querySelector("#coffeeOpenBtn").onclick = async () => {
+    try {
+      await post("/api/open-url", {url: coffeeUrl});
+      toast("info", "Opening Buy Me a Coffee in browser");
+    } catch (_) {
+      toast("err", "Couldn't open browser");
+    }
+  };
+  dlg.querySelector("#coffeeCopyBtn").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(coffeeUrl);
+      toast("ok", "Coffee link copied to clipboard");
+    } catch (_) {
+      toast("err", "Failed to copy link");
+    }
+  };
 }
 
 function shortcutsDialog(){
@@ -2250,6 +2711,13 @@ async function boot(){
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
   // Start in downloads view. render() below ensures the library count is
   // populated even when downloads were already completed before this session.
+  const bg = document.getElementById("bentoGrid");
+  if(bg) bg.style.display = ui.showSpeedChart ? "" : "none";
+  const compChk = document.getElementById("moreCompactCheck");
+  if(compChk) compChk.textContent = ui.compact ? "On" : "Off";
+  const speedChk = document.getElementById("moreSpeedChartCheck");
+  if(speedChk) speedChk.textContent = ui.showSpeedChart ? "On" : "Off";
+
   setView("downloads");
   render();
   renderSpeedBars();

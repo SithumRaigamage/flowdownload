@@ -71,3 +71,46 @@ def blend_title_bar(qt_window, background_hex: str, dark: bool) -> bool:
         return True
     except (OSError, ValueError, TypeError, AttributeError):
         return False
+
+
+def update_macos_menu_title(app_name: str = "FlowDownload") -> bool:
+    """Rename the first macOS Application Menu item so it displays FlowDownload."""
+    if _objc is None or QGuiApplication.platformName() != "cocoa":
+        return False
+    try:
+        ns_app_cls = _objc.objc_getClass(b"NSApplication")
+        ns_app = _send(ns_app_cls, "sharedApplication")
+        main_menu = _send(ns_app, "mainMenu")
+        if main_menu:
+            first_item = _send(main_menu, "itemAtIndex:", 0, argtypes=(ctypes.c_long,))
+            if first_item:
+                title_str = _ns_string(app_name)
+                _send(first_item, "setTitle:", title_str, argtypes=(ctypes.c_void_p,), restype=None)
+                submenu = _send(first_item, "submenu")
+                if submenu:
+                    _send(submenu, "setTitle:", title_str, argtypes=(ctypes.c_void_p,), restype=None)
+                return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return False
+
+
+def activate_macos_app(qt_window=None) -> bool:
+    """Activate FlowDownload as a regular macOS app and bring its menu bar and window to front."""
+    if _objc is None or QGuiApplication.platformName() != "cocoa":
+        return False
+    try:
+        ns_app_cls = _objc.objc_getClass(b"NSApplication")
+        ns_app = _send(ns_app_cls, "sharedApplication")
+        # NSApplicationActivationPolicyRegular = 0 (ensures full foreground GUI status and Dock presence)
+        _send(ns_app, "setActivationPolicy:", 0, argtypes=(ctypes.c_long,), restype=ctypes.c_bool)
+        # Bring app to front over Finder/terminal
+        _send(ns_app, "activateIgnoringOtherApps:", True, argtypes=(ctypes.c_bool,), restype=None)
+        update_macos_menu_title("FlowDownload")
+        if qt_window is not None:
+            qt_window.raise_()
+            qt_window.activateWindow()
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+

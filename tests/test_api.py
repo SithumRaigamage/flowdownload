@@ -26,6 +26,31 @@ def test_index_injects_version_and_token():
     assert "__FLOWDOWNLOAD_" not in html
 
 
+def test_index_injects_build_metadata():
+    from app.version import build_date_label, build_label
+
+    html = _index_html()
+    # The build number and date are injected alongside the version so a user
+    # can tell two builds of the same version apart -- and so a bug report
+    # names the revision it came from.
+    assert f'const APP_BUILD = "{build_label()}"' in html
+    assert f'const APP_BUILD_DATE = "{build_date_label()}"' in html
+    # The About pane renders the version with its build number, and the
+    # footer adds the build date. Both are built at runtime by the page's
+    # own string concatenation, so the served HTML carries the expressions.
+    assert "'+esc(APP_VERSION)+' '+esc(APP_BUILD)+'" in html
+    assert "esc(APP_BUILD_DATE)" in html
+
+
+def test_page_template_has_no_hardcoded_build_metadata():
+    # The template must not carry a literal build number or date -- both
+    # come from the baked BUILD_INFO (or git, in a source checkout).
+    with open("app/web/index.html", encoding="utf-8") as f:
+        template = f.read()
+    assert "' (35)'" not in template
+    assert "20 Oct 2026" not in template
+
+
 def test_index_withholds_the_token_without_it():
     # Any local process can reach 127.0.0.1; the page must not be how
     # it learns the token.
@@ -38,6 +63,25 @@ def test_index_withholds_the_token_without_it():
 def test_version_matches_version_file():
     with open("VERSION") as f:
         assert APP_VERSION == f.read().strip()
+
+
+def test_update_check_reports_latest_release(monkeypatch):
+    from app.api import server
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"tag_name": "v9.0.0", "html_url": "https://github.com/SithumRaigamage/flowdownload/releases/tag/v9.0.0"}
+
+    monkeypatch.setattr(server.requests, "get", lambda *args, **kwargs: Response())
+    app = create_app(None, None, None, "/unused/settings.json", "test-token", "/unused")
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/api/update-check")
+    result = endpoint(_=None)
+    assert result.latest_version == "9.0.0"
+    assert result.update_available is True
+    assert result.release_url.endswith("/v9.0.0")
 
 
 def test_settings_out_exposes_per_site_limit():

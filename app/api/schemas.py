@@ -99,6 +99,13 @@ class ProbeResponse(BaseModel):
     filename: str
 
 
+class UpdateCheckResponse(BaseModel):
+    current_version: str
+    latest_version: str
+    update_available: bool
+    release_url: str
+
+
 class SettingsOut(BaseModel):
     download_dir: str
     max_concurrent_downloads: int

@@ -79,6 +79,8 @@ class TrayController:
         self.window.showNormal()
         self.window.raise_()
         self.window.activateWindow()
+        from app.ui.macos_window import activate_macos_app
+        activate_macos_app(self.window)
 
     def _on_task_finished(self, task_id: str, status_value: str) -> None:
         if not self.manager.settings.notifications_enabled:

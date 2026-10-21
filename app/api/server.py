@@ -8,6 +8,7 @@ import secrets
 import shutil
 from pathlib import Path
 
+import requests
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
@@ -27,6 +28,7 @@ from app.api.schemas import (
     RefreshUrlRequest,
     SettingsOut,
     SettingsPatch,
+    UpdateCheckResponse,
 )
 from app.engine.manager import DownloadManager
 from app.engine.models import DownloadStatus
@@ -34,10 +36,20 @@ from app.engine.paths import prune_empty_auto_folder_dir
 from app.engine.probe import guess_filename_from_url, probe_remote_filename
 from app.engine.settings import Settings
 from app.media import transcode
-from app.version import APP_VERSION
+from app.version import APP_VERSION, build_date_label, build_label
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "web"
 FONTS_DIR = FRONTEND_DIR / "fonts"
+LATEST_RELEASE_URL = "https://api.github.com/repos/SithumRaigamage/flowdownload/releases/latest"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Parse the numeric portion of a release version for comparison."""
+    value = version.strip().lstrip("vV")
+    parts = value.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        raise ValueError(f"Invalid release version: {version}")
+    return tuple(int(part) for part in parts)
 
 
 def _sniff_media_type(path: str) -> str | None:
@@ -150,7 +162,16 @@ def create_app(
         if not (_is_token(query_token) or _is_token(flowdownload_token)):
             return HTMLResponse("Missing or invalid token", status_code=401)
         html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
-        html = html.replace("__FLOWDOWNLOAD_TOKEN__", token).replace("__FLOWDOWNLOAD_VERSION__", APP_VERSION)
+        # The build number and date are baked at build time (see app/version.py
+        # and FlowDownload.spec); they let a user tell two builds of the same
+        # version apart, and report which revision a bug came from.
+        html = (
+            html
+            .replace("__FLOWDOWNLOAD_TOKEN__", token)
+            .replace("__FLOWDOWNLOAD_VERSION__", APP_VERSION)
+            .replace("__FLOWDOWNLOAD_BUILD__", build_label())
+            .replace("__FLOWDOWNLOAD_BUILD_DATE__", build_date_label())
+        )
         response = HTMLResponse(html)
         # QWebEngineView keeps a persistent on-disk HTTP cache across app
         # launches (it's not a throwaway browser tab) -- without this, an
@@ -229,6 +250,33 @@ def create_app(
         filename = probe_remote_filename(url) or guess_filename_from_url(url)
         return ProbeResponse(filename=filename)
 
+    @app.get("/api/update-check", response_model=UpdateCheckResponse)
+    def check_for_updates(_=Depends(require_token)):
+        try:
+            response = requests.get(
+                LATEST_RELEASE_URL,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "FlowDownload update checker",
+                },
+                timeout=5,
+            )
+            response.raise_for_status()
+            release = response.json()
+            latest_version = str(release["tag_name"])
+            release_url = str(release["html_url"])
+            current = _version_tuple(APP_VERSION)
+            latest = _version_tuple(latest_version)
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(status_code=502, detail=f"Couldn't check for updates: {exc}") from exc
+
+        return UpdateCheckResponse(
+            current_version=APP_VERSION,
+            latest_version=latest_version.lstrip("vV"),
+            update_available=latest > current,
+            release_url=release_url,
+        )
+
     @app.post("/api/dedupe-check", response_model=DedupeCheckResponse)
     def dedupe_check(body: DedupeCheckRequest, _=Depends(require_token)):
         """Returns whether the given URL has already been completed.
@@ -290,6 +338,15 @@ def create_app(
         path = dest_path if os.path.exists(dest_path) else os.path.dirname(dest_path)
         platform_util.reveal(path)
         return {"ok": True}
+
+    @app.post("/api/open-url")
+    async def open_external_url(request: Request, _=Depends(require_token)):
+        body = await request.json()
+        url = body.get("url", "")
+        if url.startswith("http://") or url.startswith("https://"):
+            platform_util.open_url(url)
+            return {"ok": True}
+        return {"error": "Invalid URL"}
 
     @app.get("/api/downloads/{task_id}/stream")
     def stream_download(task_id: str, _=Depends(require_token_or_cookie)):

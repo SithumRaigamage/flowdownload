@@ -10,7 +10,10 @@
 # dist/FlowDownload/ (FlowDownload[.exe] + flowdownload-host[.exe]), which
 # packaging/ turns into an installer / AppImage.
 
+import datetime
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -28,6 +31,27 @@ IS_WINDOWS = sys.platform == "win32"
 # the build without that flag just re-embeds whatever version is already here.
 APP_VERSION = (ROOT / "VERSION").read_text().strip()
 
+# Build metadata baked at build time so the packaged app can report its own
+# revision and date without calling git at runtime (a frozen bundle ships no
+# git history). The build number is the commit count, matching what release
+# tags are built from; the date is the build day in ISO form.
+#
+# Written to a temp dir and bundled under the name BUILD_INFO (next to
+# VERSION) rather than into build/, which is PyInstaller's own work dir.
+_BUILD_NUMBER = "0"
+try:
+    _count = subprocess.check_output(
+        ["git", "rev-list", "--count", "HEAD"], cwd=str(ROOT), text=True,
+    ).strip()
+    if _count:
+        _BUILD_NUMBER = _count
+except Exception:
+    pass
+_BUILD_DATE = datetime.date.today().isoformat()
+_BUILD_DIR = Path(tempfile.mkdtemp(prefix="flowdownload-build-"))
+_BUILD_INFO = _BUILD_DIR / "BUILD_INFO"
+_BUILD_INFO.write_text(f"{_BUILD_NUMBER},{_BUILD_DATE}", encoding="utf-8")
+
 # The web UI is served by the bundled ApiServer, so it has to be copied in
 # alongside the Python modules. Collecting from `app/web` keeps the relative
 # path the runtime expects (`app/web/index.html`). The .icns is also bundled
@@ -37,6 +61,9 @@ datas = [
     (str(ROOT / "app" / "web" / "fonts"), "app/web/fonts"),
     # Read at runtime by app/version.py so the UI can show the build version.
     (str(ROOT / "VERSION"), "."),
+    # Read at runtime by app/version.py so the UI can show the build number
+    # and date. See the block above.
+    (str(_BUILD_INFO), "."),
     # The Chrome extension, so "Load unpacked" can point inside the app
     # instead of at a source checkout (see scripts/setup_chrome_integration.py).
     (str(ROOT / "chrome_extension"), "chrome_extension"),
