@@ -261,12 +261,17 @@ class DownloadManager(QObject):
         worker = self._workers.get(task_id)
         if worker is not None:
             worker.pause()
+        # A resume issued while the worker was still unwinding must not turn
+        # this pause back into QUEUED (see _do_status_changed).
+        self._resume_pending.discard(task_id)
         # Flip the task status *now*, before the worker exits. Otherwise
         # _dispatch_queue() (called from _on_worker_finished when the worker
         # finishes the current chunk) sees status==DOWNLOADING and immediately
-        # spawns a replacement, so the pause never sticks.
+        # spawns a replacement, so the pause never sticks. QUEUED tasks are
+        # paused too -- otherwise a bulk pause leaves them queued and the
+        # dispatcher starts them as soon as the paused workers free a slot.
         task = self.tasks.get(task_id)
-        if task is not None and task.status in ACTIVE_STATUSES:
+        if task is not None and task.status in (*ACTIVE_STATUSES, DownloadStatus.QUEUED):
             task.status = DownloadStatus.PAUSED
             task.error_message = ""
             task.updated_at = time.time()

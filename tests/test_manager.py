@@ -122,6 +122,20 @@ def test_resume_right_after_pause_is_not_ignored(make_manager, server, wait):
     assert open(task.dest_path, "rb").read() == DATA
 
 
+def test_pause_sticks_for_queued_tasks(make_manager):
+    mgr = make_manager(max_concurrent_downloads=1)
+    mgr._spawn = lambda task_id: setattr(mgr.tasks[task_id], "status", S.DOWNLOADING)
+    running = DownloadTask(url="https://e.test/a", dest_path="/tmp/fd-pq-a", status=S.DOWNLOADING)
+    queued = DownloadTask(url="https://e.test/b", dest_path="/tmp/fd-pq-b", status=S.QUEUED)
+    for task in (running, queued):
+        mgr.tasks[task.id] = task
+    mgr.pause(running.id)
+    mgr.pause(queued.id)
+    mgr._dispatch_queue()  # what the freed slot triggers once the worker exits
+    assert running.status == S.PAUSED
+    assert queued.status == S.PAUSED
+
+
 def test_resume_all_skips_cancelled(make_manager):
     mgr = make_manager(max_concurrent_downloads=1)
     mgr._spawn = lambda task_id: None
