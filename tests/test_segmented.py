@@ -93,9 +93,10 @@ def test_connection_budget_is_shared_per_site(make_manager, server, wait):
     a = mgr.tasks[mgr.add_download(f"{server}/a?delay=0.2", "a.bin")]
     b = mgr.tasks[mgr.add_download(f"{server}/b?delay=0.2", "b.bin")]
     c = mgr.tasks[mgr.add_download(f"{server}/c?delay=0.2", "c.bin")]
-    assert wait(lambda: a.connections == 4 and b.connections == 2)
-    assert c.status == S.QUEUED  # 4 + 2 = the site's 6
-    for t in (a, b):
+    # 4 + 2 = the site's 6; c still starts, on a single connection
+    assert wait(lambda: a.connections == 4 and b.connections == 2 and c.connections == 1)
+    assert c.status == S.DOWNLOADING
+    for t in (a, b, c):
         mgr.pause(t.id)
 
 

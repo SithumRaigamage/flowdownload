@@ -233,8 +233,9 @@ class DownloadManager(QObject):
             self.storage.save(task)
             self.task_updated.emit(task_id)
             return
-        if (self._active_count() >= self.settings.max_concurrent_downloads
-                or self._connections_used(domain_key(task.url)) >= self._site_limit()):
+        # Only "Downloads at once" queues a task. The per-site limit just
+        # shrinks the connections _spawn grants (down to 1), never blocks.
+        if self._active_count() >= self.settings.max_concurrent_downloads:
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -418,12 +419,6 @@ class DownloadManager(QObject):
         free_slots = self.settings.max_concurrent_downloads - self._active_count()
         if free_slots <= 0:
             return
-        site_limit = self._site_limit()
-        per_domain: dict[str, int] = {}  # connections in use per site
-        for t in self.tasks.values():
-            if t.status in ACTIVE_STATUSES:
-                key = domain_key(t.url)
-                per_domain[key] = per_domain.get(key, 0) + max(1, t.connections)
         # Only auto-start QUEUED tasks. PAUSED tasks must wait for an explicit
         # Resume click — otherwise the dispatcher re-spawns them immediately
         # after the user clicks Pause, which made Pause All look broken.
@@ -437,19 +432,16 @@ class DownloadManager(QObject):
                 break
             if task.id in self._workers:
                 continue  # previous worker still unwinding; never run two on one .part
-            # A domain at its cap is skipped, not a stopping point -- a queued
-            # task from another site can still take the free slot.
-            key = domain_key(task.url)
-            if per_domain.get(key, 0) >= site_limit:
-                continue
+            # No per-site check here: a site whose connection budget is used
+            # up still starts the task, on a single connection (see _spawn).
             self._spawn(task.id)
-            per_domain[key] = per_domain.get(key, 0) + max(1, task.connections)
             free_slots -= 1
 
     def _spawn(self, task_id: str) -> None:
         task = self.tasks[task_id]
         # Grant what's left of the site's connection budget, up to the
-        # per-download setting. The worker reports back (connections_resolved)
+        # per-download setting -- and always at least 1, so a site at its
+        # budget still runs every task "Downloads at once" allows. The worker reports back (connections_resolved)
         # if it ends up using fewer, which frees the rest for other downloads.
         wanted = max(1, min(int(self.settings.connections_per_download), MAX_CONNECTIONS_PER_DOWNLOAD))
         free = self._site_limit() - self._connections_used(domain_key(task.url), exclude=task_id)

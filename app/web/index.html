@@ -1324,27 +1324,15 @@ function visible(){
   return out;
 }
 
-// Same grouping as _domain_key in app/engine/manager.py: last two hostname
-// labels, or the whole host for an IP literal.
-function domainKey(url){
-  let h; try{ h=new URL(url).hostname.toLowerCase(); }catch(_){ return url; }
-  if(/^[\d.]+$/.test(h) || h.startsWith("[")) return h;
-  return h.split(".").slice(-2).join(".");
-}
-
 // Why a queued download hasn't started. Computed on every render rather
 // than sent by the server: it depends on *other* downloads, which change
 // without this row receiving an update of its own.
 function waitReason(d){
   if(d.state!=="queued") return "";
   const active=downloads.filter(x=>x.state==="downloading"||x.state==="retrying");
+  // Only "Downloads at once" queues; the per-site limit just lowers how
+  // many connections each download gets.
   if(active.length>=settingsCache.max_concurrent_downloads) return "Waiting for a free slot";
-  // The per-site limit is a connection budget: a split-file download
-  // holds several of its connections.
-  const lim=settingsCache.site_connection_limit, key=domainKey(d.url);
-  const used=active.filter(x=>domainKey(x.url)===key).reduce((n,x)=>n+Math.max(1,x.connections||1),0);
-  if(lim && used>=lim)
-    return "Waiting — site connection limit ("+lim+") reached for "+key;
   return "";
 }
 
@@ -2168,7 +2156,7 @@ function settingsPanes(){
         '<input class="input mono" type="number" min="0" max="50" step="1" id="setSiteConns" value="'+esc(settingsCache.site_connection_limit||0)+'" style="flex:1;width:auto">'+
         '<button class="btn btn-primary btn-sm" id="setSiteConnsSave">Save</button>'+
       '</div>'+
-      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">0 = no limit, so Downloads at once decides. Set a number only if a site starts failing with many downloads at once (some servers refuse above about 12). Subdomains count as one site, e.g. v1 and v2.cdnde.com.</p>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">0 = no limit. Never holds a download in the queue: Downloads at once alone decides that. A site at its limit still starts every download, each on a single connection. Set a number only if a site starts failing with many connections (some servers refuse above about 12). Subdomains count as one site, e.g. v1 and v2.cdnde.com.</p>'+
       '</div>'+
       '<div class="field"><label class="label" for="setConnections">Connections per download</label>'+
       '<div style="display:flex;gap:8px;align-items:center">'+
