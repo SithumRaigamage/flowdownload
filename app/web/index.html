@@ -331,6 +331,22 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .lib-empty-icon{width:56px;height:56px;border-radius:18px;background:var(--muted);display:grid;place-items:center;color:var(--muted-foreground)}
 .lib-empty h3{margin:0;font-size:16px;font-weight:600}
 .lib-empty p{margin:0;font-size:13px;color:var(--muted-foreground);max-width:320px}
+.lib-list{background:var(--card);border:1px solid var(--border);border-radius:24px;overflow:hidden}
+.lib-list-head,.lib-row{display:grid;grid-template-columns:56px minmax(0,1fr) 90px 120px;align-items:center;gap:14px;padding:0 18px}
+.lib-list-head{height:40px;border-bottom:1px solid var(--border);font-size:12px;font-weight:500;color:var(--muted-foreground)}
+.lib-col{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 6px;margin:0 -6px;border-radius:8px;justify-self:start}
+.lib-col.num{justify-self:end}
+.lib-col:hover{background:var(--accent);color:var(--foreground)}
+.lib-col[aria-sort]{color:var(--foreground)}
+.lib-day{padding:16px 18px 6px;font-size:12px;font-weight:600;color:var(--muted-foreground)}
+.lib-day+.lib-row{border-top:0}
+.lib-row{height:54px;border-top:1px solid var(--border);transition:background .12s}
+.lib-list-head+.lib-row{border-top:0}
+.lib-row:hover{background:var(--accent)}
+.lib-row-thumb{width:56px;height:36px;border-radius:9px;background:var(--muted);overflow:hidden;display:grid;place-items:center;color:var(--muted-foreground);font-size:13px;font-weight:600}
+.lib-row-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.lib-row-name{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-row-size,.lib-row-date{font-size:12px;color:var(--muted-foreground);text-align:right}
 
 /* ---------- library player ---------- */
 .lib-player-scrim{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:24px;animation:fade .15s ease-out}
@@ -588,7 +604,23 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
     </div>
 
     <div id="library-view">
-      <div class="lib-head"><div class="pills" id="libFilters"></div></div>
+      <div class="lib-head">
+        <div class="pills" id="libFilters"></div>
+        <div class="tools-right">
+          <div class="search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input class="input" id="libSearch" placeholder="Search library" aria-label="Search library">
+          </div>
+          <div class="view-switch" role="group" aria-label="Library view mode">
+            <button class="btn btn-sm btn-icon" data-libview="list" title="List view" aria-label="List view" aria-pressed="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+            <button class="btn btn-sm btn-icon" data-libview="grid" title="Grid view" aria-label="Grid view" aria-pressed="false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
       <div class="lib-grid" id="libGrid"></div>
     </div>
   </div>
@@ -665,7 +697,11 @@ let sheetLog = {id:null, entries:[]};
 const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all",
   layout:(()=>{ try{ return localStorage.getItem("fd-layout")||"tiles"; }catch(_){ return "tiles"; } })(),
   compact:(()=>{ try{ return localStorage.getItem("fd-compact")==="true"; }catch(_){ return false; } })(),
-  showSpeedChart:(()=>{ try{ return localStorage.getItem("fd-speed-chart")!=="false"; }catch(_){ return true; } })()};
+  showSpeedChart:(()=>{ try{ return localStorage.getItem("fd-speed-chart")!=="false"; }catch(_){ return true; } })(),
+  libQuery:"",
+  libView:(()=>{ try{ return localStorage.getItem("fd-lib-view")||"list"; }catch(_){ return "list"; } })(),
+  libSort:(()=>{ try{ return JSON.parse(localStorage.getItem("fd-lib-sort"))||{key:"added",dir:"desc"}; }catch(_){ return {key:"added",dir:"desc"}; } })()};
+try{ ui.libFilter=localStorage.getItem("fd-lib-filter")||"all"; }catch(_){}
 const thumbCache=new Map(); // id -> dataURL
 const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg","mp3","wav","aac","m4a","flac","ogg","opus","m4b"];
 // Slot bounds: shared by the toolbar +/- buttons and the Settings dialog so
@@ -741,12 +777,24 @@ function libraryItems(){
 }
 function libVisible(filter){
   filter = filter || ui.libFilter;
+  const q=ui.libQuery.trim().toLowerCase();
   return libraryItems().filter(d=>(
     filter==="all" ||
     (filter==="video" && isVideoDownload(d)) ||
     (filter==="audio" && isAudioDownload(d))
-  ));
+  ) && (!q || d.name.toLowerCase().includes(q)));
 }
+// Default direction when a column is first clicked; clicking it again flips.
+const LIB_SORT_DEFAULT_DIR={name:"asc", size:"desc", added:"desc"};
+function libSorted(items){
+  const {key,dir}=ui.libSort;
+  const cmp = key==="name" ? (a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:"base"})
+    : key==="size" ? (a,b)=>(a.size||0)-(b.size||0)
+    : (a,b)=>a.added-b.added;
+  return items.slice().sort((a,b)=>dir==="asc"?cmp(a,b):cmp(b,a));
+}
+// "Sat, 25 Oct 2026" -- always the full date, in local time.
+const fmtDay=ms=>new Date(ms).toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short",year:"numeric"});
 
 /* ---------- thumbnail extraction ---------- */
 const _thumbVideos=new Map(); // id -> video element
@@ -839,6 +887,7 @@ function renderLibFilters(){
     e.preventDefault();
     e.stopPropagation();
     ui.libFilter=b.dataset.libfilter;
+    try{ localStorage.setItem("fd-lib-filter", ui.libFilter); }catch(_){}
     renderLibFilters();
     renderLibrary();
   });
@@ -902,6 +951,12 @@ async function renderLibrary(){
   const filter = ui.libFilter;
   let items;
   try { items = libVisible(); } catch(err) { console.error("libVisible error:", err); items = []; }
+  document.querySelectorAll("[data-libview]").forEach(b=>b.setAttribute("aria-pressed", b.dataset.libview===ui.libView));
+  grid.className = items.length && ui.libView==="list" ? "lib-list" : "lib-grid";
+  if(!items.length && ui.libQuery.trim()){
+    grid.innerHTML='<div class="lib-empty"><h3>No matches</h3><p>No file names contain “'+esc(ui.libQuery.trim())+'”.</p></div>';
+    return;
+  }
   if(!items.length){
     grid.innerHTML='<div class="lib-empty" style="grid-column:1/-1">'+
       '<div class="lib-empty-icon">'+
@@ -914,6 +969,7 @@ async function renderLibrary(){
     grid.querySelector("#libAddBtn").onclick=()=>addDialog();
     return;
   }
+  if(ui.libView==="list") return renderLibList(grid, items);
 
   grid.innerHTML=items.map(d=>{
     const isVid=isVideoDownload(d);
@@ -964,6 +1020,54 @@ async function renderLibrary(){
           '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>'+
         '</div></div>';
     }
+  }
+}
+
+// List layout. Day headers only appear when sorted by date; name/size
+// sorts give a flat list since days would just interleave.
+async function renderLibList(box, items){
+  const {key,dir}=ui.libSort;
+  const arrow=k=>k!==key?"":(dir==="asc"?" ↑":" ↓");
+  const col=(k,label,cls)=>'<button class="lib-col'+(cls?" "+cls:"")+'" data-libsort="'+k+'"'+
+    (k===key?' aria-sort="'+(dir==="asc"?"ascending":"descending")+'"':"")+'>'+label+arrow(k)+'</button>';
+  const thumb=d=>{
+    if(thumbCache.has(d.id)) return '<img src="'+thumbCache.get(d.id)+'" alt="">';
+    if(isVideoDownload(d)) return esc(d.name.charAt(0).toUpperCase());
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+  };
+  let html='<div class="lib-list-head"><span></span>'+col("name","Name")+col("size","Size","num")+col("added","Date","num")+'</div>';
+  let lastDay=null;
+  for(const d of libSorted(items)){
+    if(key==="added"){
+      const day=new Date(d.added).toDateString();
+      if(day!==lastDay){ html+='<div class="lib-day">'+esc(fmtDay(d.added))+'</div>'; lastDay=day; }
+    }
+    html+='<div class="lib-row" data-libid="'+esc(d.id)+'">'+
+      '<div class="lib-row-thumb" id="thumb-'+esc(d.id)+'">'+thumb(d)+'</div>'+
+      '<div class="lib-row-name" title="'+esc(d.name)+'">'+esc(d.name)+'</div>'+
+      '<div class="lib-row-size mono">'+esc(fmtBytes(d.size))+'</div>'+
+      '<div class="lib-row-date mono">'+esc(fmtDate(d.added))+'</div>'+
+    '</div>';
+  }
+  box.innerHTML=html;
+
+  box.querySelectorAll("[data-libsort]").forEach(b=>b.onclick=()=>{
+    const k=b.dataset.libsort;
+    ui.libSort = k===key ? {key:k, dir:dir==="asc"?"desc":"asc"} : {key:k, dir:LIB_SORT_DEFAULT_DIR[k]};
+    try{ localStorage.setItem("fd-lib-sort", JSON.stringify(ui.libSort)); }catch(_){}
+    renderLibrary();
+  });
+  box.querySelectorAll(".lib-row").forEach(row=>{
+    row.onclick=()=>openLibPlayer(row.dataset.libid);
+    row.oncontextmenu=(e)=>{e.preventDefault(); openMenu({getBoundingClientRect:()=>({left:e.clientX,bottom:e.clientY,right:e.clientX})}, row.dataset.libid); };
+  });
+
+  // Rows render first; uncached video frames fill in afterwards.
+  for(const d of items){
+    if(!isVideoDownload(d) || thumbCache.has(d.id)) continue;
+    const url=await extractThumbnail(d);
+    const el=document.getElementById("thumb-"+d.id);
+    if(url && el) el.innerHTML='<img src="'+url+'" alt="">';
   }
 }
 
@@ -1959,6 +2063,12 @@ document.getElementById("moreClearCompletedBtn")?.addEventListener("click", () =
 });
 
 document.getElementById("search").addEventListener("input",e=>{ui.query=e.target.value;renderList()});
+document.getElementById("libSearch").addEventListener("input",e=>{ui.libQuery=e.target.value;renderLibrary()});
+document.querySelectorAll("[data-libview]").forEach(b=>b.onclick=()=>{
+  ui.libView=b.dataset.libview;
+  try{ localStorage.setItem("fd-lib-view", ui.libView); }catch(_){}
+  renderLibrary();
+});
 document.getElementById("sort").addEventListener("change",e=>{ui.sort=e.target.value;renderList()});
 document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
   const running=downloads.filter(d=>d.state==="downloading"||d.state==="retrying");
@@ -2623,7 +2733,7 @@ document.addEventListener("keydown",e=>{
     if(ui.activeId){ui.activeId=null;render()} closeMenu(); return;
   }
   if(meta&&e.key==="n"){ e.preventDefault(); addDialog(); return; }
-  if(meta&&e.key==="f"){ e.preventDefault(); document.getElementById("search").focus(); return; }
+  if(meta&&e.key==="f"){ e.preventDefault(); document.getElementById(ui.view==="library"?"libSearch":"search").focus(); return; }
   if(meta&&e.key===","){ e.preventDefault(); settingsDialog(); return; }
   if(meta&&e.key==="/"){ e.preventDefault(); shortcutsDialog(); return; }
   if(meta&&e.shiftKey&&e.key.toLowerCase()==="l"){ e.preventDefault(); toggleTheme(); return; }
