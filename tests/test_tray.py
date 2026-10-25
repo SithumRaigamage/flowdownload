@@ -15,13 +15,16 @@ class _Window(QWidget):
         self.activations += 1
 
 
-def test_new_download_only_surfaces_a_hidden_window(make_manager, qapp):
+def test_new_download_never_surfaces_the_window(make_manager, qapp):
+    # A download added from Chrome must not reopen a window the user
+    # closed to the tray or minimized, nor steal focus from a visible one.
     window = _Window()
-    tray = TrayController(window, make_manager())
+    manager = make_manager()
+    tray = TrayController(window, manager)
     window.show()
-    tray._on_task_added("t1")
-    assert window.activations == 0  # already visible: don't steal focus
+    manager.task_added.emit("t1")
+    assert window.activations == 0
     window.hide()
-    tray._on_task_added("t2")
-    assert window.isVisible() and window.activations == 1
+    manager.task_added.emit("t2")
+    assert not window.isVisible() and window.activations == 0
     tray.icon.hide()

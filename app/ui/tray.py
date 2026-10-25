@@ -58,21 +58,11 @@ class TrayController:
         self.icon.show()
 
         self.manager.task_finished.connect(self._on_task_finished)
-        # A download that arrives while the window is hidden (started
-        # minimized at launch, or closed to tray) should still surface the
-        # window -- the whole point of hiding on a bare cold start is that
-        # there's nothing to show yet, not that downloads should stay silent.
-        self.manager.task_added.connect(self._on_task_added)
+        # New downloads deliberately don't surface the window: re-opening it
+        # on every Chrome hand-off undid closing it to the tray.
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self._show_window()
-
-    def _on_task_added(self, _task_id: str) -> None:
-        # Surface a hidden/minimized window, but leave a visible one alone:
-        # raising and activating it on every Chrome hand-off stole focus
-        # from whatever the user was doing.
-        if not self.window.isVisible() or self.window.isMinimized():
             self._show_window()
 
     def _show_window(self) -> None:

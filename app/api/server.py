@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import mimetypes
 import os
@@ -104,6 +105,61 @@ def _sniff_media_type(path: str) -> str | None:
         return "video/mpeg"
 
     return mimetypes.guess_type(path)[0]
+
+
+LIBRARY_VIDEO_EXTENSIONS = {"mp4", "mov", "webm", "mkv", "avi", "vid", "m4v", "mpg", "mpeg"}
+LIBRARY_AUDIO_EXTENSIONS = {"mp3", "wav", "aac", "m4a", "flac", "ogg", "opus", "m4b"}
+
+
+def library_file_id(path: str) -> str:
+    """Stable id for an on-disk library file; never a raw path, so the client
+    can only ask for files the server itself found by scanning."""
+    return "f_" + hashlib.sha1(os.path.realpath(path).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def scan_library(root: str) -> list[dict]:
+    """Media files in root and one level of subfolders (where auto_folder_by_type
+    puts them). Hidden files and in-progress .part downloads are skipped
+    because their extension is not a media one."""
+    found: list[dict] = []
+
+    def _scan(folder: str, depth: int) -> None:
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if depth == 0:
+                        _scan(entry.path, 1)
+                    continue
+                if not entry.is_file():
+                    continue
+                ext = entry.name.rsplit(".", 1)[-1].lower() if "." in entry.name else ""
+                if ext in LIBRARY_VIDEO_EXTENSIONS:
+                    kind = "video"
+                elif ext in LIBRARY_AUDIO_EXTENSIONS:
+                    kind = "audio"
+                else:
+                    continue
+                st = entry.stat()
+            except OSError:
+                continue
+            found.append({
+                "id": library_file_id(entry.path),
+                "name": entry.name,
+                "path": os.path.realpath(entry.path),
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "kind": kind,
+            })
+
+    _scan(root, 0)
+    found.sort(key=lambda f: f["mtime"], reverse=True)
+    return found
 
 
 def create_app(
@@ -332,7 +388,7 @@ def create_app(
             task = manager.tasks.get(task_id)
             return task.dest_path if task is not None else None
 
-        dest_path = executor.call(_get_path)
+        dest_path = library_index.get(task_id) if task_id.startswith("f_") else executor.call(_get_path)
         if dest_path is None:
             raise HTTPException(status_code=404, detail="No such download")
         path = dest_path if os.path.exists(dest_path) else os.path.dirname(dest_path)
@@ -348,6 +404,30 @@ def create_app(
             return {"ok": True}
         return {"error": "Invalid URL"}
 
+    # id -> realpath of media files found by the last /api/library scan.
+    library_index: dict[str, str] = {}
+
+    def _media_path(task_id: str) -> str | None:
+        """Path for a completed download, or for a file the library scan found.
+        The task lookup runs on the manager thread; library ids never do."""
+        def _get():
+            task = manager.tasks.get(task_id)
+            if task is None or task.status != DownloadStatus.COMPLETED:
+                return None
+            return task.dest_path
+        path = executor.call(_get) if not task_id.startswith("f_") else library_index.get(task_id)
+        if path is None or not os.path.exists(path):
+            return None
+        return path
+
+    @app.get("/api/library")
+    def list_library(_=Depends(require_token)):
+        root = executor.call(lambda: manager.settings.download_dir)
+        files = scan_library(root)  # off the main thread: a big folder must not freeze the UI
+        library_index.clear()
+        library_index.update({f["id"]: f["path"] for f in files})
+        return files
+
     @app.get("/api/downloads/{task_id}/stream")
     def stream_download(task_id: str, _=Depends(require_token_or_cookie)):
         """Stream a completed download file for in-app preview.
@@ -356,15 +436,7 @@ def create_app(
         The caller carries the flowdownload_token cookie so no Authorization header
         is needed (the <video>/<audio> element can't set one).
         """
-        def _get():
-            task = manager.tasks.get(task_id)
-            if task is None or task.status != DownloadStatus.COMPLETED:
-                return None
-            if not os.path.exists(task.dest_path):
-                return None
-            return task.dest_path
-
-        dest_path = executor.call(_get)
+        dest_path = _media_path(task_id)
         if dest_path is None:
             raise HTTPException(status_code=404, detail="File not found or not ready")
 
@@ -410,15 +482,7 @@ def create_app(
         """
         is_head = request.method == "HEAD"
 
-        # Read the file path on the manager thread (same mechanism as /stream)
-        def _get():
-            task = manager.tasks.get(task_id)
-            if task is None or task.status != DownloadStatus.COMPLETED:
-                return None
-            if not os.path.exists(task.dest_path):
-                return None
-            return task.dest_path
-        dest_path = executor.call(_get)
+        dest_path = _media_path(task_id)
         if dest_path is None:
             raise HTTPException(status_code=404, detail="File not found or not ready")
 
@@ -503,13 +567,8 @@ def create_app(
         # Only the task lookup runs on the Qt main thread: ffprobe (inside
         # transcode.probe_media) can take seconds, and this endpoint is polled once a
         # second -- probing in here froze the whole UI for every poll.
-        def _get():
-            task = manager.tasks.get(task_id)
-            if task is None or task.status != DownloadStatus.COMPLETED:
-                return None
-            return task.dest_path
-        dest_path = executor.call(_get)
-        if dest_path is None or not os.path.exists(dest_path):
+        dest_path = _media_path(task_id)
+        if dest_path is None:
             raise HTTPException(status_code=404, detail="No such download")
         needs_transcode, duration = transcode.probe_media(dest_path)
         if not needs_transcode:

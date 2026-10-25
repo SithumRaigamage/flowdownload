@@ -289,3 +289,43 @@ def test_theme_setting_defaults_to_system_and_is_validated():
     assert SettingsPatch(theme="dark").theme == "dark"
     with pytest.raises(ValidationError):
         SettingsPatch(theme="sepia")
+
+
+def _library_app(tmp_path, tasks=None):
+    from types import SimpleNamespace
+
+    manager = SimpleNamespace(tasks=tasks or {}, settings=SimpleNamespace(download_dir=str(tmp_path)))
+    executor = SimpleNamespace(call=lambda fn: fn())
+    app = create_app(manager, executor, None, "/unused/settings.json", "t", str(tmp_path))
+    def route(suffix):
+        return next(r.endpoint for r in app.routes if getattr(r, "path", "").endswith(suffix))
+    return route
+
+
+def test_library_lists_media_files_on_disk(tmp_path):
+    (tmp_path / "clip.mp4").write_bytes(b"x")
+    (tmp_path / "Video").mkdir()
+    (tmp_path / "Video" / "nested.VID").write_bytes(b"x")
+    (tmp_path / "song.mp3").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")
+    (tmp_path / ".hidden.mp4").write_bytes(b"x")
+    (tmp_path / "partial.mp4.part").write_bytes(b"x")
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "too-deep.mp4").write_bytes(b"x")
+
+    files = _library_app(tmp_path)("/api/library")()
+    assert sorted((f["name"], f["kind"]) for f in files) == [
+        ("clip.mp4", "video"), ("nested.VID", "video"), ("song.mp3", "audio"),
+    ]
+
+
+def test_library_files_stream_by_id_without_a_download_record(tmp_path):
+    import pytest
+    from fastapi import HTTPException
+
+    (tmp_path / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    route = _library_app(tmp_path)
+    [entry] = route("/api/library")()
+    assert route("/stream")(entry["id"]).path == entry["path"]
+    with pytest.raises(HTTPException):
+        route("/stream")("f_0000000000000000")  # never scanned, so never served

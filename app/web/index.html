@@ -713,9 +713,35 @@ function isAudioDownload(d){
   const ext = (d.name.split(".").pop() || "").toLowerCase();
   return AUDIO_EXTENSIONS.includes(ext);
 }
+// Media files found on disk in the download folder (GET /api/library). They
+// outlive their download records, so "Clear completed" no longer empties
+// the Library.
+let libFiles=[];
+let _libRefreshTimer=null;
+function refreshLibrary(){
+  // Debounced: clearing many downloads fires one "removed" event each.
+  clearTimeout(_libRefreshTimer);
+  _libRefreshTimer=setTimeout(async()=>{
+    try{ libFiles=await getJSON("/api/library"); }catch(_){ return; }
+    renderViewNav();
+    if(ui.view==="library"){ renderLibFilters(); renderLibrary(); }
+  },150);
+}
+// Completed media downloads plus on-disk files. A file that still has a
+// download record shows once, as the download, so its menu keeps the
+// task actions (copy source link, details, remove).
+function libraryItems(){
+  const tasks=downloads.filter(isMediaDownload);
+  const taken=new Set(tasks.map(d=>d.dest));
+  const files=libFiles.filter(f=>!taken.has(f.path)).map(f=>({
+    id:f.id, name:f.name, dest:f.path, size:f.size, received:f.size,
+    added:f.mtime*1000, state:"completed", url:"", host:"", fileOnly:true,
+  }));
+  return tasks.concat(files).sort((a,b)=>b.added-a.added);
+}
 function libVisible(filter){
   filter = filter || ui.libFilter;
-  return downloads.filter(d=>isMediaDownload(d) && (
+  return libraryItems().filter(d=>(
     filter==="all" ||
     (filter==="video" && isVideoDownload(d)) ||
     (filter==="audio" && isAudioDownload(d))
@@ -802,7 +828,7 @@ function renderLibFilters(){
   ];
   // Counts must be computed from the unfiltered media set; otherwise the
   // currently-active sub-filter zeros out the other two counts.
-  const allMedia = downloads.filter(d => isMediaDownload(d));
+  const allMedia = libraryItems();
   const countFor = id => id === "all" ? allMedia.length
     : allMedia.filter(d => id === "video" ? isVideoDownload(d) : isAudioDownload(d)).length;
   box.innerHTML=items.map(f=>{
@@ -820,7 +846,7 @@ function renderLibFilters(){
 
 function renderViewNav(){
   const dlCount=downloads.length;
-  const libCount=downloads.filter(d=>isMediaDownload(d)).length;
+  const libCount=libraryItems().length;
   document.getElementById("navCountDownloads").textContent=dlCount;
   document.getElementById("navCountLibrary").textContent=libCount;
   document.getElementById("navDownloads").setAttribute("aria-current", ui.view==="downloads");
@@ -949,7 +975,7 @@ async function renderLibrary(){
 // FFmpeg can decode it. Files already in WebM/Opus/VP9 are passed
 // through without transcoding.
 function openLibPlayer(id){
-  const d=downloads.find(x=>x.id===id); if(!d) return;
+  const d=libraryItems().find(x=>x.id===id); if(!d) return;
   const ext=(d.name.split(".").pop()||"").toLowerCase();
   const audioExts=["mp3","wav","aac","m4a","flac","ogg"];
   const isVideo=!audioExts.includes(ext);
@@ -1032,8 +1058,9 @@ function openLibPlayer(id){
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>'+
           REVEAL_LABEL+
         '</button>'+
-        '<button class="btn btn-outline btn-sm" data-act="copy" data-id="'+esc(d.id)+'">Copy link</button>'+
-        '<button class="btn btn-ghost btn-sm" id="libDetailsBtn">View details</button>'+
+        (d.fileOnly ? '' :
+          '<button class="btn btn-outline btn-sm" data-act="copy" data-id="'+esc(d.id)+'">Copy link</button>'+
+          '<button class="btn btn-ghost btn-sm" id="libDetailsBtn">View details</button>')+
       '</div>'+
     '</div>'+
   '</div>';
@@ -1041,7 +1068,8 @@ function openLibPlayer(id){
   document.getElementById("libCloseBtn").onclick=closeLibPlayer;
   document.getElementById("libScrim").addEventListener("click",e=>{ if(e.target.id==="libScrim") closeLibPlayer(); });
   document.querySelectorAll(".lib-player-foot [data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
-  document.getElementById("libDetailsBtn").onclick=()=>{ closeLibPlayer(); ui.activeId=id; ui.tab="overview"; setView("downloads"); render(); };
+  const libDetailsBtn=document.getElementById("libDetailsBtn");
+  if(libDetailsBtn) libDetailsBtn.onclick=()=>{ closeLibPlayer(); ui.activeId=id; ui.tab="overview"; setView("downloads"); render(); };
 
   if(!isMedia) return;
 
@@ -1296,7 +1324,7 @@ function setView(v){
   document.getElementById("library-view").classList.toggle("active",!isDL);
   document.getElementById("viewTitle").textContent=isDL?"Downloads":"Library";
   if(isDL) render();
-  else { renderLibFilters(); renderLibrary(); }
+  else { renderLibFilters(); renderLibrary(); refreshLibrary(); }
 }
 
 /* ---------- list ---------- */
@@ -1686,7 +1714,7 @@ function render(){
 
 /* ---------- actions ---------- */
 async function act(id,what){
-  const d=downloads.find(x=>x.id===id); if(!d) return;
+  const d=downloads.find(x=>x.id===id) || libraryItems().find(x=>x.id===id); if(!d) return;
   try{
     if(what==="pause") await post("/api/downloads/"+id+"/pause");
     else if(what==="resume") await post("/api/downloads/"+id+"/resume");
@@ -1821,10 +1849,19 @@ document.getElementById("hero").addEventListener("click",e=>{
 /* ---------- context menu ---------- */
 function openMenu(anchor,id){
   closeMenu();
-  const d=downloads.find(x=>x.id===id); if(!d) return;
+  const d=downloads.find(x=>x.id===id) || libraryItems().find(x=>x.id===id); if(!d) return;
   const r=anchor.getBoundingClientRect();
   const m=document.createElement("div");
   m.className="menu"; m.id="ctxmenu";
+  if(d.fileOnly){
+    // A file on disk with no download record: no task actions apply.
+    m.innerHTML='<button data-m="play">Preview / Play</button><button data-m="reveal">'+REVEAL_LABEL+'</button>';
+    document.body.appendChild(m);
+    m.style.left=Math.min(r.left, innerWidth-200)+"px";
+    m.style.top=Math.min(r.bottom+4, innerHeight-m.offsetHeight-10)+"px";
+    m.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>{act(id,b.dataset.m);closeMenu()});
+    return;
+  }
   const items=[];
   if(d.state==="downloading"||d.state==="retrying") items.push(["pause","Pause"]);
   if(d.state==="paused"||d.state==="queued") items.push(["resume","Resume"]);
@@ -1946,7 +1983,7 @@ document.getElementById("removeAllBtn").addEventListener("click",async()=>{
     completed.forEach(d=>thumbCache.delete(d.id));
     if(ui.activeId && completed.find(d=>d.id===ui.activeId)) ui.activeId = null;
     toast("ok","Removed "+completed.length+" completed","Files are kept on disk");
-    render();
+    render(); refreshLibrary();
   }catch(err){ toast("err","Couldn't remove completed",err.message); }
 });
 document.getElementById("decSlot").addEventListener("click", async () => {
@@ -2244,7 +2281,7 @@ async function settingsDialog(initialTab = "General"){
     const dirBrowse=dlg.querySelector("#setBrowseDir");
     if(dirBrowse) dirBrowse.onclick=async()=>{
       try{ const r=await post("/api/pick-folder");
-        if(r.path){ settingsCache=await patch("/api/settings",{download_dir:r.path}); refreshTab(); toast("ok","Default folder updated"); } }
+        if(r.path){ settingsCache=await patch("/api/settings",{download_dir:r.path}); refreshTab(); refreshLibrary(); toast("ok","Default folder updated"); } }
       catch(err){ toast("err","Couldn't change folder",err.message); }
     };
     const maxInput=dlg.querySelector("[data-input='max_concurrent_downloads']");
@@ -2295,7 +2332,7 @@ async function settingsDialog(initialTab = "General"){
         completed.forEach(d=>thumbCache.delete(d.id));
         if(ui.activeId && completed.find(d=>d.id===ui.activeId)) ui.activeId=null;
         toast("ok","Cleared "+r.removed+" completed downloads","Files are kept on disk");
-        render();
+        render(); refreshLibrary();
       }
       catch(err){ toast("err","Couldn't clear completed",err.message); }
     };
@@ -2682,6 +2719,7 @@ function connectWS(){
       if(ui.activeId===msg.id) ui.activeId=null;
       if(ui.view==="library") renderLibrary();
       renderViewNav(); render();
+      refreshLibrary();
     }
   };
   ws.onclose=()=>{ ui.wsConnected=false; renderStats(); setTimeout(connectWS, wsRetryMs); wsRetryMs=Math.min(wsRetryMs*1.6,10000); };
@@ -2707,7 +2745,7 @@ async function boot(){
   if(speedChk) speedChk.textContent = ui.showSpeedChart ? "On" : "Off";
 
   setView("downloads");
-  render();
+  render(); refreshLibrary();
   renderSpeedBars();
   connectWS();
   setInterval(async()=>{
