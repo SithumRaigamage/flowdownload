@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -136,8 +137,14 @@ def transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> str |
       writing to a file first, the duration is known and the browser
       gets full seek/Range support via FastAPI's FileResponse.
     """
-    cmd = [
-        find_binary("ffmpeg"),
+    ffmpeg = find_binary("ffmpeg")
+    # Checked up front: behind `nice`, a missing ffmpeg is only an exit code.
+    if not shutil.which(ffmpeg):
+        return FFMPEG_MISSING
+    # Lowest CPU priority: these run in the background (see prewarm) and
+    # must never starve a live preview (live_webm_cmd) of encoding time.
+    cmd = ([] if IS_WINDOWS else ["nice", "-n", "19"]) + [
+        ffmpeg,
         "-hide_banner", "-loglevel", "error",
         "-y",  # overwrite existing file
         "-i", src_path,
@@ -173,6 +180,29 @@ def transcode_to_webm(src_path: str, dest_path: str, duration_s: float) -> str |
             os.remove(dest_path + ".tmp")  # gone already after a successful replace
         except OSError:
             pass
+
+
+def live_webm_cmd(src_path: str, start_s: float) -> list[str]:
+    """ffmpeg command streaming src_path as WebM to stdout from start_s.
+
+    For instant preview: playback starts as soon as the first frames are
+    encoded instead of after a whole-file transcode. The stream has no
+    duration or cues, so the player takes the duration from probe_media and
+    seeks by asking for a new stream at the target time (input -ss is a
+    fast keyframe seek). Capped at 720p so encoding stays well ahead of
+    playback."""
+    return [
+        find_binary("ffmpeg"),
+        "-hide_banner", "-loglevel", "error",
+        "-ss", f"{start_s:.3f}",
+        "-i", src_path,
+        "-vf", "scale=-2:'min(720,ih)'",
+        "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32",
+        "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1",
+        "-c:a", "libopus", "-b:a", "96k",
+        "-f", "webm", "-live", "1",
+        "pipe:1",
+    ]
 
 
 def probe_duration(path: str) -> float:
@@ -312,6 +342,58 @@ def get_or_build(src_path: str, cache_dir: str,
             return None
         time.sleep(0.5)
     return None
+
+
+_prewarm_queue: queue.Queue[tuple[str, str]] = queue.Queue()
+_prewarm_pending: set[str] = set()
+_prewarm_lock = threading.Lock()
+_prewarm_thread: threading.Thread | None = None
+
+
+def prewarm(paths: list[str], cache_dir: str) -> None:
+    """Queue background transcodes so the player finds them cached.
+
+    One worker, one ffmpeg at a time: opening the library must not start
+    an encoder per file. A click on a file mid-prewarm joins the same
+    encode through get_or_build's per-key coalescing."""
+    global _prewarm_thread
+    with _prewarm_lock:
+        for path in paths:
+            if path not in _prewarm_pending:
+                _prewarm_pending.add(path)
+                _prewarm_queue.put((path, cache_dir))
+        if _prewarm_thread is None:
+            _prewarm_thread = threading.Thread(target=_prewarm_worker, daemon=True)
+            _prewarm_thread.start()
+
+
+def _cache_bytes(cache_dir: str) -> int:
+    try:
+        return sum(e.stat().st_size for e in os.scandir(cache_dir)
+                   if e.name.endswith(".webm") and e.is_file())
+    except OSError:
+        return 0
+
+
+def _prewarm_worker() -> None:
+    while True:
+        path, cache_dir = _prewarm_queue.get()
+        try:
+            if not os.path.exists(path) or not probe_media(path)[0]:
+                continue
+            dest = os.path.join(cache_dir, cache_key(path))
+            if os.path.exists(dest) or transcode_error(path) is not None:
+                continue
+            # Never evict one prewarmed file to make room for another: with
+            # a full cache that would re-encode the library in a loop.
+            if _cache_bytes(cache_dir) >= TRANSCODE_CACHE_MAX_BYTES:
+                continue
+            get_or_build(path, cache_dir, max_wait_s=600)
+        except Exception as exc:
+            _log(f"[transcode] prewarm error: {exc}")
+        finally:
+            with _prewarm_lock:
+                _prewarm_pending.discard(path)
 
 
 def transcode_error(src_path: str) -> str | None:

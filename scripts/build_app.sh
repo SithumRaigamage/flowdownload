@@ -73,11 +73,19 @@ if [[ ${#install_to[@]} -gt 0 ]]; then
     dest="${install_to[0]}"
     mkdir -p "$dest"
     echo "==> Installing to $dest/FlowDownload.app"
-    rm -rf "$dest/FlowDownload.app"
-    cp -R "$APP_PATH" "$dest/FlowDownload.app"
     # Ad-hoc sign so Gatekeeper on Apple Silicon will run it. Without this,
-    # double-clicking from Finder pops a "cannot be opened" dialog.
-    codesign --force --deep --sign - "$dest/FlowDownload.app"
+    # double-clicking from Finder pops a "cannot be opened" dialog. Signed
+    # here, before copying: macOS App Management blocks writes into a signed
+    # .app in Applications ("Operation not permitted"), which left a
+    # half-copied, unlaunchable bundle behind.
+    codesign --force --deep --sign - "$APP_PATH"
+    # Copy under a non-.app name (not treated as an app bundle while it's
+    # written), then rename into place in one step.
+    staging="$dest/.FlowDownload.app.installing"
+    rm -rf "$staging"
+    ditto "$APP_PATH" "$staging"
+    rm -rf "$dest/FlowDownload.app"
+    mv "$staging" "$dest/FlowDownload.app"
     echo "==> Installed."
 fi
 

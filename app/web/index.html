@@ -1078,6 +1078,12 @@ async function renderLibList(box, items){
 // source on-the-fly to VP9/Opus (WebM) so Qt WebEngine's open-source
 // FFmpeg can decode it. Files already in WebM/Opus/VP9 are passed
 // through without transcoding.
+// Material volume_up / volume_off, the same filled style as the fullscreen
+// icon; .lib-ctrl-btn svg makes them white.
+const VOL_ICON={
+  on:'<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>',
+  off:'<svg viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>',
+};
 function openLibPlayer(id){
   const d=libraryItems().find(x=>x.id===id); if(!d) return;
   const ext=(d.name.split(".").pop()||"").toLowerCase();
@@ -1111,16 +1117,12 @@ function openLibPlayer(id){
               '<'+tag+' id="libMedia" autoplay playsinline style="width:100%;border-radius:6px 6px 0 0;background:#000;display:none;max-height:60vh">'+
               'Your browser does not support '+tag+' playback.'+
               '</'+tag+'>'+
-              // First-play overlay: a "Transcoding..." message with a
-              // progress bar. The <video> stays hidden behind this until
-              // the server reports the transcode is done.
-              '<div id="libTranscode" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#e6e8ec;font-size:13px">'+
+              // Loading overlay: a spinner while the stream starts, plus a
+              // "Converting…" label while a live conversion is starting or
+              // catching up (first play, after a seek, on a stall).
+              '<div id="libTranscode" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#e6e8ec;font-size:13px;background:rgba(0,0,0,.45);pointer-events:none">'+
                 '<div class="spinner" style="width:18px;height:18px;border:2px solid #3a3f48;border-top-color:#7d8a9c;border-radius:50%;animation:spin 0.9s linear infinite"></div>'+
-                '<div>Preparing video…</div>'+
-                '<div class="lib-transcode-bar" style="width:60%;max-width:300px;height:6px;background:#1f2329;border-radius:3px;overflow:hidden">'+
-                  '<i id="libTranscodeFill" style="display:block;width:0%;height:100%;background:linear-gradient(90deg,#5e8bff,#9d6bff);transition:width .3s"></i>'+
-                '</div>'+
-                '<div id="libTranscodePct" style="font-size:11px;color:#9ba3ae;font-variant-numeric:tabular-nums">0%</div>'+
+                '<div id="libTranscodeInfo" style="display:none">Converting…</div>'+
               '</div>'+
             '</div>'+
             // Custom controls bar — rendered BELOW the media element so
@@ -1141,9 +1143,9 @@ function openLibPlayer(id){
               '<span class="lib-ctrl-time" id="libTime">0:00 / 0:00</span>'+
               '<input class="lib-ctrl-seek" id="libSeek" type="range" min="0" max="100" step="0.01" value="0" aria-label="Seek" />'+
               '<button class="lib-ctrl-btn" id="libMuteBtn" aria-label="Mute" title="Mute / Unmute (M)">'+
-                // Speaker icon (volume on). Replaced by muted icon
-                // when toggled.
-                '<span id="libVolumeIcon" style="font-size:18px;line-height:1;color:#fff">🔊</span>'+
+                // Speaker icon (volume on), same Material style as the
+                // fullscreen icon. Swapped by setVolIcon on volumechange.
+                '<span id="libVolumeIcon" style="display:grid;place-items:center">'+VOL_ICON.on+'</span>'+
               '</button>'+
               '<input class="lib-ctrl-volume" id="libVolume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />'+
               (isVideo
@@ -1184,8 +1186,7 @@ function openLibPlayer(id){
   // while the spinner is up does nothing.
   const mediaEl=document.getElementById("libMedia");
   const overlay=document.getElementById("libTranscode");
-  const fill=document.getElementById("libTranscodeFill");
-  const pctEl=document.getElementById("libTranscodePct");
+  const overlayLabel=document.getElementById("libTranscodeInfo");
   const ctrl=document.getElementById("libCtrl");
   const playBtn=document.getElementById("libPlayBtn");
   const playIcon=document.getElementById("libPlayIcon");
@@ -1196,8 +1197,16 @@ function openLibPlayer(id){
   const volIcon=document.getElementById("libVolumeIcon");
   const fsBtn=document.getElementById("libFsBtn");
   const streamUrl="/api/downloads/"+encodeURIComponent(id)+"/stream-webm";
-  const statusUrl="/api/downloads/"+encodeURIComponent(id)+"/transcode-status";
+  const liveUrl="/api/downloads/"+encodeURIComponent(id)+"/live-webm";
+  // start=0: report only. Opening a file must not kick off a whole-file
+  // transcode; an unconverted file streams live instead.
+  const statusUrl="/api/downloads/"+encodeURIComponent(id)+"/transcode-status?start=0";
   let pollTimer=null;
+  // Live mode: the stream is converted as it plays and carries no duration
+  // or cues, so the real duration comes from the server, and the element's
+  // currentTime counts from liveOffset (where the current stream started).
+  let liveDur=null;
+  let liveOffset=0;
   let seeking=false;  // user is dragging the seek thumb — pause timeupdate
   // Set by closeLibPlayer (via ctrl._teardown). The status poll outlives
   // the modal otherwise -- and once the transcode finished it started
@@ -1214,15 +1223,12 @@ function openLibPlayer(id){
     overlay.replaceChildren(text);
   }
 
-  // Unicode glyphs swapped in place when toggling play/pause and
-  // mute/unmute. We use plain text characters rather than <svg>
-  // so there's no question of the icon rendering: these characters
-  // are part of the system font and inherit color from CSS.
+  // Unicode glyphs swapped in place when toggling play/pause. Plain text
+  // characters inherit color from CSS. (Mute uses VOL_ICON's SVGs: the
+  // speaker emoji render in colour and never matched the other buttons.)
   const ICON={
     play:"▶",   // U+25B6 BLACK RIGHT-POINTING TRIANGLE
     pause:"❚❚", // U+275A HEAVY VERTICAL BAR × 2
-    volOn:"🔊", // U+1F50A SPEAKER WITH THREE SOUND WAVES
-    volMute:"🔇", // U+1F507 SPEAKER WITH CANCELLATION STROKE
   };
 
   function fmt(t){
@@ -1231,10 +1237,33 @@ function openLibPlayer(id){
     return m+":"+(s<10?"0":"")+s;
   }
 
+  const totalDur=()=>liveDur!=null ? liveDur : mediaEl.duration;
+
+  // Spinner over the player; "Converting…" too while a live stream is
+  // starting or catching up, so a wait reads as work, not a hang.
+  function showLoading(){
+    overlay.style.display="flex";
+    overlayLabel.style.display=liveDur!=null ? "" : "none";
+  }
+  function hideLoading(){ overlay.style.display="none"; }
+
+  function startLive(t){
+    liveOffset=Math.max(0, Math.min(t, liveDur>1 ? liveDur-1 : t));
+    showLoading();
+    mediaEl.src=liveUrl+"?t="+liveOffset.toFixed(3);
+    mediaEl.play().catch(()=>{});
+    syncTime();
+  }
+
+  function seekTo(t){
+    if(liveDur!=null) startLive(t);  // no cues to seek in: start a new stream there
+    else mediaEl.currentTime=t;
+  }
+
   function syncTime(){
     if(seeking) return;
-    const dur=mediaEl.duration;
-    const cur=mediaEl.currentTime;
+    const dur=totalDur();
+    const cur=liveOffset+mediaEl.currentTime;
     // Update the gradient fill via the CSS var the ::-webkit-slider-runnable-track
     // background reads. This drives the visual progress without
     // re-rendering anything else.
@@ -1249,8 +1278,10 @@ function openLibPlayer(id){
     playBtn.setAttribute("aria-label", playing?"Pause":"Play");
   }
 
-  function setVolIcon(muted){
-    volIcon.textContent=muted ? ICON.volMute : ICON.volOn;
+  // Volume 0 is silent too, so it shows as muted.
+  function setVolIcon(){
+    const muted=mediaEl.muted || mediaEl.volume===0;
+    volIcon.innerHTML=muted ? VOL_ICON.off : VOL_ICON.on;
     muteBtn.setAttribute("aria-label", muted?"Unmute":"Mute");
   }
 
@@ -1266,7 +1297,7 @@ function openLibPlayer(id){
   };
   seekEl.addEventListener("input",()=>{
     seeking=true;
-    const dur=mediaEl.duration;
+    const dur=totalDur();
     if(dur>0 && isFinite(dur)){
       const t=(parseFloat(seekEl.value)/100)*dur;
       timeEl.textContent=fmt(t)+" / "+fmt(dur);
@@ -1274,11 +1305,9 @@ function openLibPlayer(id){
     }
   });
   seekEl.addEventListener("change",()=>{
-    const dur=mediaEl.duration;
-    if(dur>0 && isFinite(dur)){
-      mediaEl.currentTime=(parseFloat(seekEl.value)/100)*dur;
-    }
+    const dur=totalDur();
     seeking=false;
+    if(dur>0 && isFinite(dur)) seekTo((parseFloat(seekEl.value)/100)*dur);
   });
   // Cancel `seeking` if the user lets go of the thumb anywhere
   // off the document, or if focus is lost mid-drag.
@@ -1287,19 +1316,20 @@ function openLibPlayer(id){
   window.addEventListener("blur", stopSeeking);
 
   muteBtn.onclick=()=>{
-    mediaEl.muted=!mediaEl.muted;
-    setVolIcon(mediaEl.muted);
+    if(mediaEl.muted || mediaEl.volume===0){
+      // Unmuting at volume 0 would stay silent: bring the volume back too.
+      mediaEl.muted=false;
+      if(mediaEl.volume===0){ mediaEl.volume=1; volEl.value=1; }
+    } else {
+      mediaEl.muted=true;
+    }
   };
   volEl.addEventListener("input",()=>{
     mediaEl.volume=parseFloat(volEl.value);
-    if(mediaEl.volume>0 && mediaEl.muted){
-      mediaEl.muted=false;
-      setVolIcon(false);
-    } else if(mediaEl.volume===0 && !mediaEl.muted){
-      mediaEl.muted=true;
-      setVolIcon(true);
-    }
+    mediaEl.muted=mediaEl.volume===0;
   });
+  // The icon follows the element's real state, whatever changed it.
+  mediaEl.addEventListener("volumechange", setVolIcon);
   if(fsBtn){
     fsBtn.onclick=()=>{
       const wrap=document.getElementById("libPlayerWrap");
@@ -1329,16 +1359,13 @@ function openLibPlayer(id){
   };
 
   // Two paths to get the WebM:
-  //   1. Cache hit (state=cached in /transcode-status): assign the
-  //      stream URL directly to <video> and play.
-  //   2. Cache miss: poll /transcode-status which kicks off the
-  //      transcode AND reports percent. When state="cached", assign
-  //      the same URL to <video> for instant playback.
-  // In both cases the file is on disk before the <video> element starts
-  // loading, so the WebM header (including the duration) is valid and
-  // the seek bar renders correctly.
+  //   1. state=cached in /transcode-status (playable as-is, or a finished
+  //      background transcode): play the file from /stream-webm, with
+  //      real seeking.
+  //   2. Otherwise: stream it from /live-webm, converted as it plays.
+  //      Starts in a second or two; seeking restarts the stream there.
 
-  function startPlayback(){
+  function startPlayback(live){
     if(pollTimer){clearTimeout(pollTimer); pollTimer=null;}
     if(closed) return;
     mediaEl.onerror=()=>{
@@ -1347,9 +1374,14 @@ function openLibPlayer(id){
       showProblem("This file can't be played here. Use "+REVEAL_LABEL+" to open it in another app.");
     };
     mediaEl.style.display="block";
-    if(overlay) overlay.style.display="none";
-    mediaEl.src=streamUrl;
-    mediaEl.load();
+    if(live) startLive(0);
+    else {
+      showLoading();
+      mediaEl.src=streamUrl;
+      mediaEl.load();
+    }
+    mediaEl.addEventListener("playing", hideLoading);
+    mediaEl.addEventListener("waiting", showLoading);  // stalled: conversion catching up
 
     // The custom-controls click handlers (play/pause/mute/volume/
     // fullscreen/seek + keyboard shortcuts) are wired at modal-open
@@ -1381,18 +1413,9 @@ function openLibPlayer(id){
       .then(r=>r.ok ? r.json() : Promise.reject(new Error("HTTP "+r.status)))
       .then(s=>{
         if(closed) return;
-        if(s.state==="cached"){
-          startPlayback();
-          return;
-        }
-        if(s.state==="failed"){ showProblem(s.error||"This file couldn't be prepared for preview."); return; }
-        // pending or transcoding -- show whatever progress we have
-        // and keep polling. 1% is the floor so the bar animates
-        // even before any bytes are written.
-        const pct=s.percent!=null ? s.percent : 1;
-        if(fill) fill.style.width=pct+"%";
-        if(pctEl) pctEl.textContent=pct+"%";
-        pollTimer=setTimeout(pollTranscodeStatus, 1000);
+        if(s.state==="cached"){ startPlayback(false); return; }
+        liveDur=s.duration_seconds||0;
+        startPlayback(true);
       })
       .catch(err=>{
         console.warn("[libPlayer] status poll failed:", err);
@@ -1400,9 +1423,7 @@ function openLibPlayer(id){
       });
   }
 
-  // Always start by polling the status endpoint. It tells us if the
-  // cache is ready (instant play) and starts the transcode if not.
-  // No need for a separate HEAD probe.
+  // Ask once whether a ready file exists; otherwise stream live.
   pollTranscodeStatus();
 }
 
@@ -2784,6 +2805,9 @@ function connectWS(){
       if(i<0){ upsert(n); render(); return; }
       const prev=downloads[i];
       downloads[i]=n;
+      // A just-finished media file: the library rescan queues its preview
+      // conversion now, so it plays instantly when opened later.
+      if(prev.state!=="completed" && n.state==="completed" && isMediaDownload(n)) refreshLibrary();
       // Live update in downloads view
       if(ui.view==="downloads"){
         const orderChanging = (ui.sort==="speed" && prev.speedBps!==n.speedBps)

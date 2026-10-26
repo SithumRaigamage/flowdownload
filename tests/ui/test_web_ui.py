@@ -228,14 +228,16 @@ def test_reconnect_resyncs_events_missed_while_disconnected(ui, server, wait):
     assert page.wait_js(f"!!document.querySelector('.row[data-id=\"{task.id}\"]')")
 
 
-def test_closing_the_player_stops_its_polling(ui, wait, monkeypatch, tmp_path):
-    # The poll used to outlive the modal and start playback on the detached
-    # <video> once the transcode finished.
+def test_unconverted_file_streams_live_and_closing_releases_it(ui, monkeypatch, tmp_path):
+    # Opening a file with no finished transcode streams it live instead of
+    # waiting on a whole-file one; closing must drop the stream so the
+    # server kills its ffmpeg.
     from app.engine.models import DownloadTask
     from app.media import transcode
 
     monkeypatch.setattr(transcode, "probe_media", lambda path: (True, 60.0))
-    monkeypatch.setattr(transcode, "get_or_build", lambda *a, **k: None)  # stays "pending"
+    built = []
+    monkeypatch.setattr(transcode, "get_or_build", lambda *a, **k: built.append(a))
     mgr, page = ui()
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"\x00" * 64)
@@ -244,11 +246,9 @@ def test_closing_the_player_stops_its_polling(ui, wait, monkeypatch, tmp_path):
     mgr.storage.save(task)
     mgr._poll_external_changes()
     assert page.wait_js(f"downloads.some(d => d.id === '{task.id}')")
-    page.js("(window._polls = 0, window._fetch = window.fetch, window.fetch = (u, o) =>"
-            " (String(u).includes('transcode-status') && window._polls++, window._fetch(u, o)), true)")
     page.js(f"(setView('library'), openLibPlayer('{task.id}'), true)")
-    assert page.wait_js("window._polls >= 2", timeout=10)
+    assert page.wait_js("(document.getElementById('libMedia').src || '').includes('/live-webm?t=0')", timeout=10)
+    assert page.js("document.getElementById('libTime').textContent.endsWith('1:00')")  # duration from the server
+    assert built == []  # opening never starts a whole-file transcode
     page.js("(closeLibPlayer(), true)")
-    after_close = page.js("window._polls")
-    wait(lambda: False, timeout=5)
-    assert page.js("window._polls") <= after_close + 1  # at most one already in flight
+    assert page.js("!document.getElementById('libMedia') || !document.getElementById('libMedia').getAttribute('src')")

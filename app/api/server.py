@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import json
@@ -11,7 +12,8 @@ from pathlib import Path
 
 import requests
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app import chrome_setup, platform_util
 from app.api.events import OVERFLOW, EventBroadcaster
@@ -426,6 +428,9 @@ def create_app(
         files = scan_library(root)  # off the main thread: a big folder must not freeze the UI
         library_index.clear()
         library_index.update({f["id"]: f["path"] for f in files})
+        # Convert every library file ahead of time, newest first, so opening
+        # one plays at once. prewarm stops when the transcode cache is full.
+        transcode.prewarm([f["path"] for f in files], os.path.join(app_data_dir, "transcoded"))
         return files
 
     @app.get("/api/downloads/{task_id}/stream")
@@ -544,12 +549,42 @@ def create_app(
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/api/downloads/{task_id}/live-webm")
+    async def stream_live(task_id: str, t: float = 0.0, _=Depends(require_token_or_cookie)):
+        """Stream a media file as WebM, converted live from `t` seconds.
+
+        The player uses this when no finished transcode is cached: playback
+        starts within a second or two instead of after a whole-file
+        transcode. Seeking requests a new stream at the target time. ffmpeg
+        is killed as soon as the player drops the connection (closed or
+        seeked elsewhere)."""
+        dest_path = await run_in_threadpool(_media_path, task_id)
+        if dest_path is None:
+            raise HTTPException(status_code=404, detail="File not found or not ready")
+        try:
+            proc = await platform_util.start_tool(
+                transcode.live_webm_cmd(dest_path, max(0.0, t)),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            raise HTTPException(status_code=503, detail=transcode.FFMPEG_MISSING) from None
+
+        async def body():
+            try:
+                while chunk := await proc.stdout.read(64 * 1024):
+                    yield chunk
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+
+        return StreamingResponse(body(), media_type="video/webm", headers={"Cache-Control": "no-store"})
+
     @app.get("/api/downloads/{task_id}/log", response_model=list[HistoryEntry])
     def download_log(task_id: str, _=Depends(require_token)):
         return executor.call(lambda: manager.get_history(task_id))
 
     @app.get("/api/downloads/{task_id}/transcode-status")
-    def transcode_status(task_id: str, _=Depends(require_token)):
+    def transcode_status(task_id: str, start: bool = True, _=Depends(require_token)):
         """Return the transcode cache state for a task.
 
         States: 'cached' (WebM is on disk, instant play), 'pending'
@@ -579,6 +614,10 @@ def create_app(
         final = os.path.join(cache_dir, key)
         if os.path.exists(final) and os.path.getsize(final) > 0:
             return {"state": "cached", "needs_transcode": True}
+        if not start:
+            # The player streams it live instead (/live-webm), which needs
+            # the duration for its seek bar.
+            return {"state": "live", "needs_transcode": True, "duration_seconds": duration}
         # Make sure the transcode is running. transcode.get_or_build
         # is idempotent: a second call while one is in progress just
         # returns the in-flight thread. Pass max_wait_s=0 to return

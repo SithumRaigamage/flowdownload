@@ -5,6 +5,7 @@ start fast on every hand-off.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
@@ -38,6 +39,12 @@ def run_tool(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """subprocess.run for an external tool: the system library path on
     Linux, and no console window on Windows."""
     return subprocess.run(cmd, env=subprocess_env(), creationflags=_NO_WINDOW, **kwargs)
+
+
+async def start_tool(cmd: list[str], **kwargs) -> asyncio.subprocess.Process:
+    """run_tool's asyncio counterpart, for output streamed while it runs."""
+    return await asyncio.create_subprocess_exec(
+        *cmd, env=subprocess_env(), creationflags=_NO_WINDOW, **kwargs)
 
 
 def reveal(path: str) -> None:
