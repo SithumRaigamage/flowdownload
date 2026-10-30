@@ -14,6 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.engine import segmented
 from app.engine.models import DownloadStatus
+from app.engine.paths import link_expiry
 from app.engine.retry_policy import compute_retry_delay
 
 CHUNK_SIZE = 64 * 1024
@@ -40,6 +41,26 @@ PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 405, 406, 410, 451}
 def _is_permanent_http_error(exc: requests.exceptions.RequestException) -> bool:
     response = getattr(exc, "response", None)
     return response is not None and response.status_code in PERMANENT_HTTP_STATUSES
+
+
+LINK_EXPIRED_MESSAGE = "Link expired — open the video page in Chrome and click download again to resume"
+
+
+def _link_expired(url: str, now: float) -> bool:
+    """True when url is a signed link whose built-in expiry time has passed.
+    Past it the server answers 403, which on its own reads like "forbidden"
+    rather than "go get a fresh link"."""
+    expiry = link_expiry(url)
+    return expiry is not None and expiry < now
+
+
+def _permanent_error_message(url: str, exc: requests.exceptions.RequestException) -> str:
+    """What to show for a permanent HTTP error: a hint to refresh the link
+    when it has expired, otherwise the server's own error."""
+    response = getattr(exc, "response", None)
+    if response is not None and response.status_code in (403, 410) and _link_expired(url, time.time()):
+        return LINK_EXPIRED_MESSAGE
+    return str(exc)
 
 
 class Paused(Exception):
@@ -145,7 +166,8 @@ class DownloadWorker(QThread):
                 return
             except requests.exceptions.RequestException as exc:
                 if _is_permanent_http_error(exc):
-                    self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
+                    self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value,
+                                             _permanent_error_message(self.url, exc))
                     return
                 if self._attempt_bytes > 0:
                     attempt = 0  # this connection made progress -- start the backoff over

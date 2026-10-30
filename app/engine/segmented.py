@@ -392,7 +392,7 @@ class _Run:
                 return
             except requests.exceptions.RequestException as exc:
                 if dl._is_permanent_http_error(exc):
-                    self._fail(str(exc))
+                    self._fail(dl._permanent_error_message(self.w.url, exc))
                     return
                 if got > 0:
                     attempt = 0

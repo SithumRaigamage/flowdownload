@@ -25,6 +25,25 @@ def domain_key(url: str) -> str:
         return ".".join(host.split(".")[-2:])
 
 
+def link_expiry(url: str) -> float | None:
+    """When a signed link stops working, as epoch seconds, or None if the
+    URL carries no expiry.
+
+    CDNs hand out links that expire after a while, e.g.
+    https://c10.trafficdeposit.com/vidi/<sig>/<token>/1793389545/<id>/x.vid
+    (epoch seconds in the path), or ...?expires=1793389545 in the query.
+    """
+    parsed = urlparse(url)
+    candidates = parsed.path.split("/") + [value for _, _, value in
+                                           (pair.partition("=") for pair in parsed.query.split("&"))]
+    for value in candidates:
+        # 10 digits from 2001-09-09 up to 2286: a long numeric id elsewhere
+        # in a path would need to be both 10 digits and land in that range.
+        if len(value) == 10 and value.isdigit() and int(value) >= 1_000_000_000:
+            return float(value)
+    return None
+
+
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 _WINDOWS_ILLEGAL_RE = re.compile(r'[<>:"/\\|?*]')
 
