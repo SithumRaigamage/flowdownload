@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from app.engine import pacing, segmented
+from app.engine import segmented
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
 from app.engine.paths import apply_auto_folder_for_path, domain_key, safe_filename
@@ -432,19 +432,10 @@ class DownloadManager(QObject):
                 break
             if task.id in self._workers:
                 continue  # previous worker still unwinding; never run two on one .part
-            # No per-site connection check here: a site whose connection budget
-            # is used up still starts the task, on a single connection (see
-            # _spawn). Expiring links are the exception -- see pacing.
-            if not self._fits_before_expiry(task):
-                continue  # held back; the 2 s poll dispatches it once it fits
+            # No per-site check here: a site whose connection budget is used
+            # up still starts the task, on a single connection (see _spawn).
             self._spawn(task.id)
             free_slots -= 1
-
-    def _fits_before_expiry(self, task: DownloadTask) -> bool:
-        site = domain_key(task.url)
-        running = [t for t in self.tasks.values()
-                   if t.status in ACTIVE_STATUSES and domain_key(t.url) == site]
-        return pacing.can_start(task, running, time.time())
 
     def _spawn(self, task_id: str) -> None:
         task = self.tasks[task_id]

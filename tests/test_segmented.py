@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
+import requests
 
 from app.engine import downloader, segmented
 from app.engine.models import DownloadStatus as S
@@ -162,3 +164,46 @@ def test_split_download_reports_its_file_map(make_manager, server, wait):
     relaunched = make_manager(db_name="t.db")  # same DB: the map comes back from the sidecar
     assert len(relaunched.tasks[task.id].segments) == 4
     assert wait(lambda: not mgr._workers)
+
+
+def test_single_stream_part_is_split_on_resume(make_manager, server, wait):
+    # A download that started on one connection used to stay on one for good.
+    mgr = make_manager(connections_per_download=1)
+    task = mgr.tasks[mgr.add_download(f"{server}/up?{SLOW}", "up.bin")]
+    assert wait(lambda: task.downloaded_bytes > 64_000)
+    mgr.pause(task.id)
+    assert wait(lambda: task.id not in mgr._workers)
+    have = os.path.getsize(task.part_path)
+    assert not os.path.exists(task.segments_path)
+    mgr.shutdown()
+
+    relaunched = make_manager(connections_per_download=4)
+    again = relaunched.tasks[task.id]
+    REQUESTS.clear()
+    relaunched.start(again.id)
+    assert wait(lambda: again.status == S.COMPLETED)
+    assert open(again.dest_path, "rb").read() == DATA
+    split = [r for r in ranges("/up") if r != "bytes=0-"]  # all but the probe
+    assert len(split) >= 3
+    assert all(int(r.split("=")[1].split("-")[0]) >= have for r in split)  # kept what it had
+
+
+def test_busy_server_gets_its_extra_connections_back(make_manager, server, wait):
+    # The server takes 2 connections and answers 503 to the rest; retrying
+    # those used to fail the whole download once they ran out of attempts.
+    mgr = make_manager(connections_per_download=4)
+    task = mgr.tasks[mgr.add_download(f"{server}/busy?maxconn=2&delay=0.05", "busy.bin")]
+    assert wait(lambda: task.status == S.COMPLETED, timeout=30)
+    assert open(task.dest_path, "rb").read() == DATA
+
+
+def test_busy_probe_is_retried_instead_of_settling_for_one_connection(make_manager, server, wait):
+    hog = threading.Thread(target=lambda: requests.get(f"{server}/hog?delay=0.05").content)
+    hog.start()
+    assert wait(lambda: CONNECTIONS["active"] == 1)  # the probe now gets 503 until the hog is done
+    mgr = make_manager(connections_per_download=4)
+    task = mgr.tasks[mgr.add_download(f"{server}/late?maxconn=1&delay=0.02", "late.bin")]
+    assert wait(lambda: task.status == S.COMPLETED, timeout=30)
+    hog.join()
+    assert open(task.dest_path, "rb").read() == DATA
+    assert any(r and not r.endswith("-") for r in ranges("/late"))  # split into bounded pieces

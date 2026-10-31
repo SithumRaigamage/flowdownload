@@ -30,7 +30,8 @@ def test_refresh_resumes_from_partial_data(make_manager, server, wait):
     REQUESTS.clear()
     mgr.refresh_url(task.id, f"{server}/new")
     assert wait(lambda: task.status == S.COMPLETED)
-    assert ranges_sent("/new") == [f"bytes={partial}-"]  # resumed, not restarted
+    # Resumed, not restarted (after a probe, as the file might be split).
+    assert ranges_sent("/new") == ["bytes=0-", f"bytes={partial}-"]
     assert open(task.dest_path, "rb").read() == DATA
     assert task.url == f"{server}/new"
 

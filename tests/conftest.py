@@ -43,6 +43,8 @@ class _Handler(BaseHTTPRequestHandler):
     delay=<s>    sleep between 32 KB chunks (default 0.01)
     drop=<n>     close the connection after sending n bytes of the body
     status=<n>   reply with this status and an empty body instead
+    maxconn=<n>  reply 503 while n bodies are already being sent, like a
+                 CDN capping connections per IP
     etag=<s>     serve this ETag (default "fixture"); an If-Range that
                  doesn't match it gets the full body (200), as real servers do
     gzip=1       gzip a full (non-ranged) body when the client's
@@ -75,6 +77,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if "status" in q:
             self.send_response(int(q["status"]))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if "maxconn" in q and CONNECTIONS["active"] >= int(q["maxconn"]):
+            self.send_response(503)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

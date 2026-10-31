@@ -15,10 +15,15 @@ Otherwise it returns False and the worker's ordinary single-stream path runs.
 
 Progress lives in a JSON sidecar next to the .part (<dest>.part.segments),
 rewritten atomically about once a second and whenever the download stops. A
-download that has a sidecar always resumes segmented; one that has a plain
-.part and no sidecar always resumes single-stream -- the two never mix,
-because a preallocated .part is already full-size and its length says
-nothing about progress.
+download that has a sidecar always resumes segmented. A plain .part with no
+sidecar (a single-stream download) is turned into a split one when its
+validator still matches: its bytes become a finished first segment and the
+rest is split. Never the other way round -- a preallocated .part is already
+full-size and its length says nothing about progress.
+
+A server that answers 503/429 to a file's extra connections ("too many from
+you") gets them back: each such connection hands its piece to the others and
+stops, down to the last one, which keeps retrying.
 """
 from __future__ import annotations
 
@@ -111,17 +116,26 @@ def _split(total: int, n: int) -> list[_Segment]:
     return [_Segment(bounds[i], bounds[i + 1] - 1) for i in range(n)]
 
 
+def _same_file(worker, etag: str, last_modified: str) -> bool:
+    """Whether the probed file is the one the worker's .part came from."""
+    if worker.etag:
+        return etag == worker.etag
+    return last_modified == worker.last_modified
+
+
 def _probe(worker) -> tuple[int, str, str] | None:
     """(total, etag, last_modified) if the server supports safe ranged resumes."""
     from app.engine import downloader as dl
 
     headers = worker._base_headers()
     headers["Range"] = "bytes=0-"
+    # A connection error or an error status raises: the worker retries the
+    # probe (or fails on a permanent error) rather than settling for one
+    # connection because the server was busy at that moment.
+    response = worker._get(headers)
     try:
-        response = worker._get(headers)
-    except requests.exceptions.RequestException:
-        return None  # let the single-stream path deal with (and retry) it
-    try:
+        if response.status_code >= 400:
+            response.raise_for_status()
         if response.status_code != 206:
             return None
         total = dl.DownloadWorker._parse_range_total(response.headers.get("Content-Range", ""))
@@ -150,7 +164,10 @@ def run_segmented(worker) -> bool:
     else:
         if state is not None or os.path.exists(sidecar):
             _discard(part)  # unusable sidecar: its .part can't be trusted either
-        if worker.max_connections <= 1 or os.path.exists(part):
+        # A single-stream .part (started on one connection, e.g. under an
+        # older version) is resumable only against the file it came from.
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        if worker.max_connections <= 1 or (have and not (worker.etag or worker.last_modified)):
             worker.connections_resolved.emit(worker.task_id, 1)
             return False
         probed = _probe(worker)
@@ -158,19 +175,29 @@ def run_segmented(worker) -> bool:
             worker.connections_resolved.emit(worker.task_id, 1)
             return False
         total, etag, last_modified = probed
-        n = min(worker.max_connections, total // MIN_PART)
-        if total < MIN_TOTAL or n < 2:
+        n = min(worker.max_connections, (total - have) // MIN_PART)
+        if total < MIN_TOTAL or n < 2 or (have and not _same_file(worker, etag, last_modified)):
             worker.connections_resolved.emit(worker.task_id, 1)
             return False
-        segments = _split(total, n)
+        # Split what's left; the bytes already in a single-stream .part
+        # become one finished segment at the front.
+        segments = [_Segment(s.start + have, s.end + have) for s in _split(total - have, n)]
+        if have:
+            segments.insert(0, _Segment(0, have - 1, have))
         os.makedirs(os.path.dirname(part), exist_ok=True)
-        with open(part, "wb") as f:
-            f.truncate(total)
+        # Sidecar first: a full-size .part without one would later pass for
+        # a finished single-stream file, while a sidecar whose .part isn't
+        # full-size yet is just discarded on the next start.
         _save(sidecar, total, etag, last_modified, segments)
+        with open(part, "ab") as f:
+            f.truncate(total)
 
     worker.etag, worker.last_modified, worker._total_bytes = etag, last_modified, total
     worker._server_digest_sha256 = None  # a ranged response's Digest can't describe the whole file
     worker.metadata_resolved.emit(worker.task_id, total, etag, last_modified, True)  # the probe got a 206
+    if worker._retrying:  # the probe needed retries; it's moving again
+        worker._retrying = False
+        worker.status_changed.emit(worker.task_id, DownloadStatus.DOWNLOADING.value, "")
     unfinished = [s for s in segments if s.remaining > 0]
     # Every granted connection, even if fewer pieces are left (e.g. resuming
     # with one unfinished): idle connections split the remaining work.
@@ -235,6 +262,7 @@ class _Run:
         # Guards splitting a segment (shrinking its end) against its owner
         # thread reserving bytes from it, and the segments list itself.
         self.lock = threading.Lock()
+        self.active = 0  # threads still pulling work (under lock)
 
     def stopped(self) -> bool:
         return self.abort.is_set() or self.w._pause_event.is_set()
@@ -270,6 +298,7 @@ class _Run:
         self.fd = os.open(self.w.part_path, os.O_WRONLY | _O_BINARY)
         threads = [threading.Thread(target=self._pull, name=f"segment-{i}", daemon=True)
                    for i in range(thread_count)]
+        self.active = thread_count
         try:
             for t in threads:
                 t.start()
@@ -330,15 +359,37 @@ class _Run:
             except queue.Empty:
                 segment = self._steal()
                 if segment is None:
+                    with self.lock:  # atomic with _release, so a handed-back piece is never stranded
+                        if not self.todo.empty():
+                            continue
+                        self.active -= 1
                     return
-            self._fetch(segment)
+            if not self._fetch(segment):
+                return  # gave its connection back to a busy server
+
+    def _release(self, seg: _Segment) -> bool:
+        """Hand `seg` back to the threads still running and stop this one,
+        unless it is the last: a server answering "busy" to the extra
+        connections of a file it is already sending is saying how many it
+        allows, so retrying them only hammers it."""
+        with self.lock:
+            if self.active <= 1:
+                return False
+            self.active -= 1
+            self.todo.put(seg)
+            active = self.active
+        self.w.connections_resolved.emit(self.w.task_id, active)  # frees the site budget
+        return True
 
     def _fail(self, message: str) -> None:
         if self.error is None:
             self.error = message
         self.abort.set()
 
-    def _fetch(self, seg: _Segment) -> None:
+    def _fetch(self, seg: _Segment) -> bool:
+        """Download `seg`. False when this thread should stop: the segment
+        was handed back to a busy server's remaining connections, or the
+        whole run is stopping."""
         from app.engine import downloader as dl  # looked up at call time so tests can patch the retry policy
 
         attempt = 0
@@ -364,7 +415,7 @@ class _Run:
                         raise _Changed()
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                         if self.stopped():
-                            return
+                            return False
                         if not chunk:
                             continue
                         with self.lock:  # reserve, so a concurrent split sees the bytes as taken
@@ -389,18 +440,20 @@ class _Run:
             except _Changed:
                 self.changed = True
                 self.abort.set()
-                return
+                return False
             except requests.exceptions.RequestException as exc:
                 if dl._is_permanent_http_error(exc):
                     self._fail(dl._permanent_error_message(self.w.url, exc))
-                    return
+                    return False
+                if dl._is_server_busy(exc) and self._release(seg):
+                    return False
                 if got > 0:
                     attempt = 0
                 attempt += 1
-                delay = dl.compute_retry_delay(attempt)
+                delay = dl._retry_delay(attempt, exc)
                 if delay is None:
                     self._fail(str(exc))
-                    return
+                    return False
                 self.last_error = exc.__class__.__name__
                 seg.waiting = True
                 deadline = time.monotonic() + delay
@@ -409,4 +462,5 @@ class _Run:
                 seg.waiting = False
             except OSError as exc:  # writing to disk failed: retrying won't help
                 self._fail(str(exc))
-                return
+                return False
+        return True
