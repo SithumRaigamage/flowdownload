@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import pytest
 
@@ -21,7 +22,8 @@ def paused_partial(mgr, server, wait, path="old"):
 
 
 def ranges_sent(path):
-    return [headers.get("Range") for p, headers in REQUESTS if p.startswith(path)]
+    # Exact path: "/new" mustn't also match the checksum lookup "/new.sha256".
+    return [headers.get("Range") for p, headers in REQUESTS if urlparse(p).path == path]
 
 
 def test_refresh_resumes_from_partial_data(make_manager, server, wait):

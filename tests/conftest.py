@@ -35,6 +35,9 @@ CONNECTIONS = {"active": 0, "peak": 0}
 _CONN_LOCK = threading.Lock()
 # path -> ETag, set mid-test to simulate the file changing on the server.
 ETAG_OVERRIDE: dict[str, str] = {}
+# path -> body, for checksum files ("/f.bin.sha256", "/SHA256SUMS"). Other
+# paths ending in .sha256 or SHA256SUMS get a 404, as on a real server.
+SIDECARS: dict[str, bytes] = {}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -69,6 +72,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         REQUESTS.append((self.path, dict(self.headers)))
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+        path = urlparse(self.path).path
+        if path in SIDECARS or path.endswith((".sha256", "SHA256SUMS")):
+            body = SIDECARS.get(path)
+            self.send_response(200 if body is not None else 404)
+            self.send_header("Content-Length", str(len(body or b"")))
+            self.end_headers()
+            self.wfile.write(body or b"")
+            return
         if "redirect" in q:
             self.send_response(302)
             self.send_header("Location", q["redirect"])

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import binascii
-import hashlib
 import hmac
 import os
 import re
@@ -12,7 +11,7 @@ from urllib.parse import urlparse
 import requests
 from PySide6.QtCore import QThread, Signal
 
-from app.engine import segmented
+from app.engine import checksum, segmented
 from app.engine.models import DownloadStatus
 from app.engine.paths import link_expiry
 from app.engine.retry_policy import compute_retry_delay
@@ -93,14 +92,17 @@ class DownloadWorker(QThread):
     progress = Signal(str, int, int, float)  # task_id, downloaded, total, speed_bps
     status_changed = Signal(str, str, str)  # task_id, status_value, error_message
     metadata_resolved = Signal(str, int, str, str, bool)  # task_id, total_bytes, etag, last_modified, ranges_ok
-    digest_computed = Signal(str, str, object)  # task_id, sha256_hex, verified (True/False/None)
+    # task_id, sha256_hex, verified (True/False/None), what it was checked
+    # against ("you" / "server" / "checksum file", "" when unchecked)
+    digest_computed = Signal(str, str, object, str)
     size_unverified = Signal(str)  # task_id -- server gave no way to confirm the download size
     connections_resolved = Signal(str, int)  # task_id, connections actually in use (may be < granted)
     segments_progress = Signal(str, object)  # task_id, [[start, done, end], ...] of a split download
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, referrer: str = "",
-                 max_connections: int = 1, limiter: RateLimiter | None = None, parent=None):
+                 max_connections: int = 1, limiter: RateLimiter | None = None,
+                 expected_checksum: str = "", parent=None):
         super().__init__(parent)
         # Deliberately plain values/instance attributes, not a reference to the
         # manager's shared DownloadTask: this thread mutates them freely as it
@@ -119,6 +121,8 @@ class DownloadWorker(QThread):
         self.last_modified = last_modified
         self.cookie_header = cookie_header
         self.referrer = referrer
+        # "algo:hex" the user typed (checksum.parse_expected), or "".
+        self.expected_checksum = expected_checksum
         # Connections the manager granted from the site's budget; more than
         # one lets segmented.run_segmented split the file.
         self.max_connections = max_connections
@@ -157,16 +161,8 @@ class DownloadWorker(QThread):
         # hashing fails (OSError), the download is still valid; the
         # manager will simply not record a digest for this task.
         try:
-            digest = _sha256_file(self.dest_path)
-            # verified is the badge surface: True when the server's
-            # Digest header (RFC 9530) was present and matched what
-            # we computed, None when the server gave no header (most
-            # don't -- not an error), False when it sent one and it
-            # DIDN'T match -- a real integrity failure (MITM or
-            # corrupted upstream), surfaced distinctly in the
-            # download log rather than folded into the None case.
-            verified = self._verify_against_server(digest)
-            self.digest_computed.emit(self.task_id, digest, verified)
+            digest, verified, source = self._check_integrity()
+            self.digest_computed.emit(self.task_id, digest, verified, source)
         except OSError:
             pass
         self.status_changed.emit(self.task_id, DownloadStatus.COMPLETED.value, "")
@@ -418,6 +414,32 @@ class DownloadWorker(QThread):
     def _verify_against_server(self, computed_hex: str) -> bool | None:
         return _verify_against_server(self._server_digest_sha256, computed_hex)
 
+    def _check_integrity(self) -> tuple[str, bool | None, str]:
+        """Hash the finished file and check it: (sha256, verified, source).
+
+        In order of trust: the checksum the user typed, the server's RFC
+        9530 Digest header, then a checksum file published next to the
+        download. verified is True on a match, False on a mismatch (a real
+        integrity failure: corrupted upstream or altered in transit), None
+        when there was nothing to check against -- the common case.
+        Raises OSError if the file can't be read.
+        """
+        algo, expected = checksum.split_expected(self.expected_checksum)
+        digests = checksum.hash_file(self.dest_path, {"sha256", algo} if expected else {"sha256"})
+        sha256 = digests["sha256"]
+        if expected:
+            return sha256, checksum.matches(expected, digests[algo]), "you"
+        verified = self._verify_against_server(sha256)
+        if verified is not None:
+            return sha256, verified, "server"
+        published = checksum.fetch_sidecar_sha256(
+            self._session, self.url, os.path.basename(self.dest_path),
+            headers=self._base_headers(), cookies=self._cookie_jar(),
+        )
+        if published:
+            return sha256, checksum.matches(published, sha256), "checksum file"
+        return sha256, None, ""
+
     def _finalize(self, downloaded: int) -> None:
         if self._total_bytes and os.path.getsize(self.part_path) != self._total_bytes:
             raise OSError(
@@ -439,14 +461,6 @@ class DownloadWorker(QThread):
             self.size_unverified.emit(self.task_id)
         os.replace(self.part_path, self.dest_path)
         self.progress.emit(self.task_id, downloaded, self._total_bytes, 0.0)
-
-
-def _sha256_file(path: str, chunk_size: int = 64 * 1024) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 _DIGEST_SHA256_RE = re.compile(r"sha-256=([A-Za-z0-9+/=]+)", re.IGNORECASE)

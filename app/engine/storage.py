@@ -70,7 +70,10 @@ class Storage:
                                   ("digest_sha256", "TEXT DEFAULT ''"),
                                   ("digest_verified", "INTEGER DEFAULT 0"),
                                   ("referrer", "TEXT DEFAULT ''"),
-                                  ("accept_ranges", "INTEGER DEFAULT 0")):
+                                  ("accept_ranges", "INTEGER DEFAULT 0"),
+                                  ("expected_checksum", "TEXT DEFAULT ''"),
+                                  ("checksum_status", "TEXT DEFAULT ''"),
+                                  ("checksum_source", "TEXT DEFAULT ''")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
         # Two processes (this app and the Chrome native host, launched fresh
@@ -108,8 +111,9 @@ class Storage:
                 INSERT INTO downloads
                     (id, url, dest_path, filename, total_bytes, downloaded_bytes,
                      status, error_message, etag, last_modified, cookie_header,
-                     digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     digest_sha256, digest_verified, referrer, accept_ranges,
+                     expected_checksum, checksum_status, checksum_source, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -125,6 +129,9 @@ class Storage:
                     digest_verified=excluded.digest_verified,
                     referrer=excluded.referrer,
                     accept_ranges=excluded.accept_ranges,
+                    expected_checksum=excluded.expected_checksum,
+                    checksum_status=excluded.checksum_status,
+                    checksum_source=excluded.checksum_source,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -158,7 +165,8 @@ class Storage:
     _COLUMNS = (
         "id, url, dest_path, filename, total_bytes, downloaded_bytes, "
         "status, error_message, etag, last_modified, cookie_header, "
-        "digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at"
+        "digest_sha256, digest_verified, referrer, accept_ranges, "
+        "expected_checksum, checksum_status, checksum_source, created_at, updated_at"
     )
 
     def load_all(self) -> list[DownloadTask]:

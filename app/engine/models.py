@@ -41,6 +41,15 @@ class DownloadTask:
     # False means the server had no Digest header; True means it matched;
     # a dedicated "failed" status for mismatch is overkill since we log it.
     digest_verified: bool = False
+    # A checksum the user typed when adding the download, as "algo:hex"
+    # (checksum.parse_expected); "" when none was given.
+    expected_checksum: str = ""
+    # Result of the last integrity check: "" = not checked, "verified",
+    # or "mismatch". A mismatch keeps the file (status stays COMPLETED)
+    # so the user can decide; the detail sheet shows it in red.
+    checksum_status: str = ""
+    # What it was checked against: "you", "server" or "checksum file".
+    checksum_source: str = ""
     # Page the download was started from, sent as the Referer header. Many
     # CDNs refuse (or throttle) requests that arrive without one.
     referrer: str = ""
@@ -88,6 +97,9 @@ class DownloadTask:
             self.digest_verified,
             self.referrer,
             self.accept_ranges,
+            self.expected_checksum,
+            self.checksum_status,
+            self.checksum_source,
             self.created_at,
             self.updated_at,
         )
@@ -97,7 +109,8 @@ class DownloadTask:
         (
             id_, url, dest_path, filename, total_bytes, downloaded_bytes,
             status, error_message, etag, last_modified, cookie_header,
-            digest_sha256, digest_verified, referrer, accept_ranges, created_at, updated_at,
+            digest_sha256, digest_verified, referrer, accept_ranges,
+            expected_checksum, checksum_status, checksum_source, created_at, updated_at,
         ) = row
         return cls(
             id=id_,
@@ -115,6 +128,9 @@ class DownloadTask:
             digest_verified=bool(digest_verified),
             referrer=referrer or "",
             accept_ranges=bool(accept_ranges),
+            expected_checksum=expected_checksum or "",
+            checksum_status=checksum_status or "",
+            checksum_source=checksum_source or "",
             created_at=created_at,
             updated_at=updated_at,
         )

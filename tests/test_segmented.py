@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -27,7 +28,8 @@ def small_thresholds(monkeypatch):
 
 
 def ranges(path):
-    return [h.get("Range") for p, h in REQUESTS if p.startswith(path)]
+    # Exact path: "/one" mustn't also match the checksum lookup "/one.sha256".
+    return [h.get("Range") for p, h in REQUESTS if urlparse(p).path == path]
 
 
 def test_large_file_downloads_over_parallel_connections(make_manager, server, wait):

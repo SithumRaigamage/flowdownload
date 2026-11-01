@@ -30,6 +30,9 @@ class DownloadOut(BaseModel):
     has_cookie: bool
     digest_sha256: str
     digest_verified: bool
+    expected_checksum: str
+    checksum_status: Literal["", "verified", "mismatch"]
+    checksum_source: str
     referrer: str
     connections: int
     # [[start, done, end], ...] byte ranges of a split download, for the UI's
@@ -60,6 +63,9 @@ class DownloadOut(BaseModel):
             has_cookie=bool(task.cookie_header),
             digest_sha256=task.digest_sha256,
             digest_verified=task.digest_verified,
+            expected_checksum=task.expected_checksum,
+            checksum_status=task.checksum_status if task.checksum_status in ("verified", "mismatch") else "",
+            checksum_source=task.checksum_source,
             referrer=task.referrer,
             connections=task.connections,
             segments=task.segments,
@@ -97,6 +103,9 @@ class NewDownloadRequest(BaseModel):
     # settings.download_dir, never client-supplied, so this can't be used
     # to write outside the download folder. See DownloadManager.add_download.
     filename: str
+    # Optional MD5/SHA-1/SHA-256 to check the finished file against;
+    # checksum.parse_expected validates it (a bad one is a 400).
+    checksum: str = Field(default="", max_length=200)
 
 
 class ProbeResponse(BaseModel):

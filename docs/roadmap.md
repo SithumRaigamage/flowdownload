@@ -126,16 +126,14 @@ Today `auto_folder_by_type` sorts files into fixed `<type>/` folders.
 - Show a 401 with no saved login as "needs a login" with a button to add one,
   rather than as a generic failure.
 
-### 1.5 More ways to verify files — S
-Today `DownloadWorker` checks the SHA-256 against an RFC 9530 `Digest` header
-only when the server sends one.
-
-- Add an optional checksum field to the Add download dialog. Accept
-  SHA-256/SHA-1/MD5 and detect which one from its length.
-- Look for a checksum file published next to the download (`file.zip.sha256`,
-  `SHA256SUMS`) and use it when it exists.
-- Show the result in the detail panel: verified, mismatch (in red), or not
-  checked.
+### 1.5 More ways to verify files — built
+Every finished file is checked, in this order, against: a checksum typed into
+the Add download dialog (MD5/SHA-1/SHA-256, detected by length), the server's
+RFC 9530 `Digest` header, or a published `file.sha256` / `SHA256SUMS` next to
+the download (only for URLs without a query string, so signed links get no
+extra requests). The result (`checksum_status`, `checksum_source`) shows in the
+detail sheet; a mismatch keeps the file, marks it in red and raises a toast.
+Code: `app/engine/checksum.py`, `DownloadWorker._check_integrity`.
 
 ---
 

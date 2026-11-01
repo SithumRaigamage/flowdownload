@@ -292,7 +292,7 @@ def create_app(
     @app.post("/api/downloads", response_model=DownloadOut, status_code=201)
     def create_download(body: NewDownloadRequest, _=Depends(require_token)):
         def _create():
-            task_id = manager.add_download(body.url, body.filename)
+            task_id = manager.add_download(body.url, body.filename, body.checksum)
             return DownloadOut.from_task(manager.tasks[task_id])
 
         try:

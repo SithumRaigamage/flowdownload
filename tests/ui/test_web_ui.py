@@ -275,3 +275,32 @@ def test_unconverted_file_streams_live_and_closing_releases_it(ui, monkeypatch, 
     assert built == []  # opening never starts a whole-file transcode
     page.js("(closeLibPlayer(), true)")
     assert page.js("!document.getElementById('libMedia') || !document.getElementById('libMedia').getAttribute('src')")
+
+
+def test_add_dialog_sends_a_checksum_and_the_sheet_shows_the_result(ui, server, wait):
+    import hashlib
+
+    from tests.conftest import DATA
+
+    mgr, page = ui()
+    page.js("addDialog()")
+    assert page.wait_js("!!document.getElementById('addChecksum')")
+    page.js(f"(document.getElementById('addUrl').value = '{server}/file.bin?delay=0',"
+            "document.getElementById('addName').value = 'file.bin',"
+            f"document.getElementById('addChecksum').value = '{hashlib.sha256(DATA).hexdigest()}',"
+            "document.getElementById('addGo').click())")
+    assert wait(lambda: mgr.tasks and next(iter(mgr.tasks.values())).checksum_status == "verified")
+    task = next(iter(mgr.tasks.values()))
+    page.js(f"(ui.activeId = '{task.id}', ui.tab = 'overview', renderSheet())")
+    assert page.wait_js("document.getElementById('sheet').textContent.includes('Verified against the checksum you entered')")
+
+
+def test_add_dialog_shows_why_a_checksum_was_refused(ui, server):
+    mgr, page = ui()
+    page.js("addDialog()")
+    assert page.wait_js("!!document.getElementById('addChecksum')")
+    page.js(f"(document.getElementById('addUrl').value = '{server}/file.bin',"
+            "document.getElementById('addChecksum').value = 'abc',"
+            "document.getElementById('addGo').click())")
+    assert page.wait_js("document.getElementById('toasts').textContent.includes('MD5, SHA-1 or SHA-256')")
+    assert not mgr.tasks

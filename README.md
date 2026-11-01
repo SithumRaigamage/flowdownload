@@ -94,6 +94,10 @@ that environment.
   the file is 8 MB or more and the server supports resumable ranges. Progress
   per piece is kept in a `<file>.part.segments` file next to the `.part`, so
   split downloads resume after a pause or restart too.
+- **Finished files are checked** against a checksum you paste into Add
+  download (MD5, SHA-1 or SHA-256), the server's `Digest` header, or a
+  `.sha256` / `SHA256SUMS` file published next to the download. A mismatch
+  keeps the file but marks it in red in its details.
 - **An optional speed limit caps all downloads together** (the dock's
   "Speed limit" button, value in Settings → Downloads, off by default). It's
   one shared cap across every download and connection, and changing it

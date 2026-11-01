@@ -728,7 +728,8 @@ function normalize(t){
     id:t.id, name:t.filename || t.dest_path.split("/").pop(), host:hostOf(t.url), url:t.url, dest:t.dest_path,
     size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
     error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
-    referrer:t.referrer||"", connections:t.connections||0, segments:t.segments||[], hasCookie:t.has_cookie, acceptRanges:t.accept_ranges, added:t.created_at*1000, updatedAt:t.updated_at*1000
+    referrer:t.referrer||"", connections:t.connections||0, segments:t.segments||[], hasCookie:t.has_cookie, acceptRanges:t.accept_ranges,
+    sha256:t.digest_sha256||"", expectedChecksum:t.expected_checksum||"", checksumStatus:t.checksum_status||"", checksumSource:t.checksum_source||"", added:t.created_at*1000, updatedAt:t.updated_at*1000
   };
 }
 function upsert(raw){
@@ -1711,6 +1712,16 @@ function renderList(){
 }
 
 /* ---------- detail sheet ---------- */
+const CHECKSUM_SOURCE_TEXT={"you":"the checksum you entered","server":"the server's Digest header","checksum file":"the published checksum file"};
+// The detail sheet's Checksum row: verified, a red mismatch, or why not.
+function checksumText(d){
+  const against=CHECKSUM_SOURCE_TEXT[d.checksumSource]||"its checksum";
+  const sha='<div class="mono" style="font-size:10.5px;color:var(--muted-foreground)">SHA-256 '+esc(d.sha256)+'</div>';
+  if(d.checksumStatus==="verified") return 'Verified against '+esc(against)+(d.sha256?sha:"");
+  if(d.checksumStatus==="mismatch") return '<span style="color:var(--destructive)">Doesn\'t match '+esc(against)+'. The file may be corrupted or altered; download it again before opening it.</span>'+(d.sha256?sha:"");
+  if(d.state!=="completed") return d.expectedChecksum?'Will be checked against the '+esc(d.expectedChecksum.split(":")[0].toUpperCase())+' you entered':'Checked when the download finishes';
+  return 'Not checked — no checksum was given or published'+(d.sha256?sha:"");
+}
 function renderSheet(){
   const sheet=document.getElementById("sheet");
   const d=downloads.find(x=>x.id===ui.activeId);
@@ -1731,6 +1742,7 @@ function renderSheet(){
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
       '<dt>Source</dt><dd class="mono" style="font-size:10.5px">'+esc(d.url)+'</dd>'+
       '<dt>Referrer</dt><dd class="mono" style="font-size:10.5px">'+(d.referrer?esc(d.referrer):"none")+'</dd>'+
+      '<dt>Checksum</dt><dd>'+checksumText(d)+'</dd>'+
     '</dl><div class="hr"></div><div class="sect">Resume support</div><dl class="kv">'+
       '<dt>Accept-Ranges</dt><dd>'+(d.acceptRanges?'<span style="color:var(--success)">bytes — resumable</span>':'<span style="color:var(--warning)">not confirmed yet — may restart on failure</span>')+'</dd>'+
       '<dt>ETag</dt><dd class="mono" style="font-size:10.5px">'+esc(d.etag||"none")+'</dd>'+
@@ -2276,6 +2288,9 @@ function addDialog(prefillUrl){
         '<button class="btn btn-outline btn-sm" id="addBrowse">Browse</button></div></div>'+
       '<div class="field"><label class="label" for="addName">Filename</label>'+
         '<input class="input" id="addName" placeholder="download" value=""></div>'+
+      '<div class="field"><label class="label" for="addChecksum">Checksum <span style="color:var(--muted-foreground);font-weight:400">(optional)</span></label>'+
+        '<input class="input mono" id="addChecksum" placeholder="MD5, SHA-1 or SHA-256 from the download page" autocomplete="off" spellcheck="false">'+
+        '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">The finished file is checked against it. Without one, FlowDownload still checks the server\'s Digest header or a published .sha256 file when there is one.</p></div>'+
     '</div>'+
     '<div class="dialog-foot"><button class="btn btn-outline" data-close>Cancel</button>'+
       '<button class="btn btn-primary" id="addGo">Add download</button></div></div>');
@@ -2322,7 +2337,8 @@ function addDialog(prefillUrl){
       // Only a filename goes to the server -- the destination folder is
       // always the current default (changed via Browse above, which
       // already saved it to settings), never sent as a path from here.
-      const task=await post("/api/downloads", {url, filename: name});
+      const checksum=dlg.querySelector("#addChecksum").value.trim();
+      const task=await post("/api/downloads", {url, filename: name, checksum});
       upsert(task); closeOverlay(); render();
       if(task.status==="completed") toast("info","Already downloaded",task.filename+" — kept the existing file");
       else toast("ok","Added",task.filename);
@@ -2871,6 +2887,9 @@ function connectWS(){
       // A just-finished media file: the library rescan queues its preview
       // conversion now, so it plays instantly when opened later.
       if(prev.state!=="completed" && n.state==="completed" && isMediaDownload(n)) refreshLibrary();
+      // A failed integrity check is easy to miss inside the detail sheet.
+      if(prev.checksumStatus!=="mismatch" && n.checksumStatus==="mismatch")
+        toast("err","Checksum doesn't match",n.name+" may be corrupted. Open its details before using it.");
       // Live update in downloads view
       if(ui.view==="downloads"){
         const orderChanging = (ui.sort==="speed" && prev.speedBps!==n.speedBps)

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from app.engine import segmented
+from app.engine import checksum, segmented
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
 from app.engine.paths import apply_auto_folder_for_path, domain_key, safe_filename
@@ -190,8 +190,9 @@ class DownloadManager(QObject):
     def get_history(self, task_id: str) -> list[dict]:
         return list(self.history.get(task_id, []))
 
-    def add_download(self, url: str, filename: str) -> str:
+    def add_download(self, url: str, filename: str, expected_checksum: str = "") -> str:
         validate_download_url(url)
+        expected_checksum = checksum.parse_expected(expected_checksum)  # ValueError -> 400
 
         # Only the filename is trusted from the caller -- the destination
         # directory is always settings.download_dir, never client-supplied,
@@ -216,6 +217,9 @@ class DownloadManager(QObject):
             # already picks a fresh filename on any collision.
 
         task = queue_download(self.storage, self.settings, url, filename, replace=replace)
+        if expected_checksum:
+            task.expected_checksum = expected_checksum
+            self.storage.save(task)
         self.tasks[task.id] = task
         self._log(task.id, "info", "Added to queue")
         self.task_added.emit(task.id)
@@ -465,6 +469,7 @@ class DownloadManager(QObject):
             task.id, task.url, task.dest_path, task.etag, task.last_modified,
             task.cookie_header, self._session, referrer=task.referrer,
             max_connections=task.connections, limiter=self.limiter,
+            expected_checksum=task.expected_checksum,
         )
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)
@@ -598,18 +603,16 @@ class DownloadManager(QObject):
         if task.status in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
             self.task_finished.emit(task_id, status_value)
 
-    def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool | None) -> None:
-        """Persist the worker-computed SHA-256 and the verification badge.
+    def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool | None, source: str) -> None:
+        """Persist the worker-computed SHA-256 and the integrity check result.
 
-        `verified` is a three-way result from the worker: True only when
-        the server advertised a Digest header (RFC 9530) and it matched
-        what we computed; None when the server sent no header at all (most
-        don't -- the common, expected case, not an error); False when it
-        DID send one and it didn't match -- a real integrity failure. The
-        stored `digest_verified` bool collapses None/False to False (the
-        "verified" badge should only ever mean a confirmed match), but the
-        log -- which is what a user actually sees -- keeps the two apart,
-        since a mismatch means something is genuinely wrong with the file.
+        `verified` is a three-way result from the worker: True when the
+        file matched what `source` said ("you", "server" or "checksum
+        file"); None when there was nothing to check against (the common,
+        expected case, not an error); False when it didn't match -- a real
+        integrity failure. `digest_verified` stays a plain "confirmed
+        match" bool; `checksum_status` keeps a mismatch apart from "not
+        checked", since a mismatch means something is wrong with the file.
         """
         try:
             task = self.tasks.get(task_id)
@@ -617,15 +620,19 @@ class DownloadManager(QObject):
                 return
             task.digest_sha256 = digest_sha256
             task.digest_verified = bool(verified)
+            task.checksum_status = {True: "verified", False: "mismatch"}.get(verified, "")
+            task.checksum_source = source if verified is not None else ""
             task.updated_at = time.time()
             self.storage.save(task)
+            against = {"you": "the checksum you entered", "server": "the server's Digest header",
+                       "checksum file": "the published checksum file"}.get(source, source)
             if verified is True:
-                self._log(task_id, "ok", f"Verified: SHA-256 {digest_sha256[:12]}…")
+                self._log(task_id, "ok", f"Verified against {against}: SHA-256 {digest_sha256[:12]}…")
             elif verified is False:
                 self._log(
                     task_id, "error",
-                    f"Integrity check FAILED: SHA-256 {digest_sha256[:12]}… does not match the "
-                    "server's Digest header — the file may be corrupted or altered in transit",
+                    f"Integrity check FAILED: the file does not match {against} — "
+                    "it may be corrupted or altered in transit",
                 )
             else:
                 self._log(task_id, "info", f"SHA-256 {digest_sha256[:12]}… (no server Digest to verify against)")
