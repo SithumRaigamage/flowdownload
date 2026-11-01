@@ -105,16 +105,14 @@ Today there's one global queue, managed by "Downloads at once" in
 - Shutdown/sleep is platform-specific. Put it in `app/platform_util.py` and
   always show a cancellable countdown first.
 
-### 1.3 Real categories — S
-Today `auto_folder_by_type` sorts files into fixed `<type>/` folders.
-
-- Replace it with editable categories: a name, file extensions, and a folder.
-  Start with IDM's defaults: Compressed, Documents, Music, Programs, Video.
-- `apply_auto_folder_for_path` in `app/engine/paths.py` looks up the matching
-  category instead of a hard-coded table.
-- Add a category filter to the Downloads view, next to the status filters.
-- Migration: users who had `auto_folder_by_type` on get today's folders as
-  their starting categories.
+### 1.3 Real categories — built
+`Settings.categories` is an editable list of `{name, extensions, folder}`
+(Settings → Downloads), used when "Sort into category folders" is on. The
+defaults are the old fixed Video/Audio/Documents/Archives folders, so nobody's
+files moved; unmatched files still go to `Other`. A folder is a subfolder of
+the download folder or any existing absolute folder. `paths.validate_categories`
+is shared by the API and `Settings.load` (a broken hand edit falls back to the
+defaults). The Downloads view has a file-type filter beside the sort control.
 
 ### 1.4 Proxy and per-site logins — S–M
 - Proxy: follow the system proxy by default. Allow a manual HTTP or SOCKS5

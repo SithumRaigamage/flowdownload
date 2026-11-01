@@ -682,7 +682,7 @@ def create_app(
         dest_path = executor.call(_remove)
         if delete_file and dest_path and os.path.exists(dest_path):
             os.remove(dest_path)
-            prune_empty_auto_folder_dir(dest_path, manager.settings.download_dir)
+            prune_empty_auto_folder_dir(dest_path, manager.settings.download_dir, manager.settings.categories)
         return {"ok": True}
 
     @app.get("/api/settings", response_model=SettingsOut)

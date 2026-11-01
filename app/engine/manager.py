@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from app.engine import checksum, segmented
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
-from app.engine.paths import apply_auto_folder_for_path, domain_key, safe_filename
+from app.engine.paths import domain_key, safe_filename
 from app.engine.probe import validate_download_url
 from app.engine.queueing import find_completed, queue_download
 from app.engine.settings import Settings
@@ -685,15 +685,3 @@ class DownloadManager(QObject):
                 existing_digest=task.digest_sha256 or None,
             )
         return DedupeResult(is_duplicate=False)
-
-    def apply_auto_folder(self, filename: str, base_dir: str | None = None) -> str:
-        """Pick a subfolder under the download dir based on the file's extension.
-
-        Returns the *unchanged* path when auto-foldering is disabled in
-        settings (so callers can pass a plain folder and the rule is opt-in).
-        When enabled, returns "base_dir/<type>/<filename>".
-        """
-        base = base_dir or self.settings.download_dir
-        if not getattr(self.settings, "auto_folder_by_type", False):
-            return os.path.join(base, filename)
-        return apply_auto_folder_for_path(filename, base)

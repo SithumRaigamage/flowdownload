@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.engine.models import DownloadTask
+from app.engine.paths import validate_categories
 from app.engine.settings import Settings
 
 # Bounds for the speed limit, matched by the UI's field (SPEED_MIN_KB/SPEED_MAX_KB in index.html).
@@ -119,12 +120,19 @@ class UpdateCheckResponse(BaseModel):
     release_url: str
 
 
+class Category(BaseModel):
+    name: str = Field(max_length=200)
+    extensions: list[str] = Field(max_length=200)
+    folder: str = Field(max_length=4096)
+
+
 class SettingsOut(BaseModel):
     download_dir: str
     max_concurrent_downloads: int
     notifications_enabled: bool
     minimize_to_tray: bool
     auto_folder_by_type: bool
+    categories: list[Category]
     duplicate_policy: Literal["rename", "skip", "overwrite"]
     connections_per_download: int
     site_connection_limit: int
@@ -140,6 +148,7 @@ class SettingsOut(BaseModel):
             notifications_enabled=settings.notifications_enabled,
             minimize_to_tray=settings.minimize_to_tray,
             auto_folder_by_type=settings.auto_folder_by_type,
+            categories=[Category(**c) for c in settings.categories],
             duplicate_policy=settings.duplicate_policy,
             connections_per_download=settings.connections_per_download,
             site_connection_limit=settings.site_connection_limit,
@@ -157,6 +166,7 @@ class SettingsPatch(BaseModel):
     notifications_enabled: bool | None = None
     minimize_to_tray: bool | None = None
     auto_folder_by_type: bool | None = None
+    categories: list[Category] | None = None
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
     site_connection_limit: int | None = Field(default=None, ge=0, le=50)
@@ -165,6 +175,15 @@ class SettingsPatch(BaseModel):
     # for some servers to drop the connection as idle.
     speed_limit_bps: int | None = Field(default=None, ge=MIN_SPEED_LIMIT_BPS, le=MAX_SPEED_LIMIT_BPS)
     theme: Literal["system", "light", "dark"] | None = None
+
+    @field_validator("categories")
+    @classmethod
+    def _valid_categories(cls, value: list[Category] | None) -> list[Category] | None:
+        # Names unique, each extension in one category, folders safe; the
+        # message reaches the Settings editor as the 400's detail.
+        if value is None:
+            return None
+        return [Category(**c) for c in validate_categories([c.model_dump() for c in value])]
 
     @field_validator("download_dir")
     @classmethod

@@ -553,6 +553,7 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             <input class="input" id="search" placeholder="Search downloads" aria-label="Search downloads">
           </div>
+          <select class="input" id="catFilter" style="width:auto" aria-label="File type"></select>
           <select class="input" id="sort" style="width:auto" aria-label="Sort by">
             <option value="added">Newest first</option>
             <option value="name">Name</option>
@@ -675,7 +676,10 @@ async function api(path, opts){
   const res = await fetch(path, Object.assign({}, opts, {headers}));
   if(!res.ok){
     let detail = res.statusText;
-    try{ const j = await res.json(); if(j && j.detail) detail = j.detail; }catch(_){}
+    try{ const j = await res.json();
+      // A 422 from request validation lists its errors; show their messages.
+      if(j && Array.isArray(j.detail)) detail = j.detail.map(e=>String(e.msg||"").replace(/^Value error, /,"")).join("; ");
+      else if(j && j.detail) detail = j.detail; }catch(_){}
     throw new Error(detail);
   }
   const ct = res.headers.get("content-type")||"";
@@ -693,7 +697,7 @@ let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, not
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
-const ui={filter:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all",
+const ui={filter:"all", category:"all", query:"", sort:"added", selected:new Set(), activeId:null, tab:"overview", wsConnected:false, view:"downloads", libFilter:"all",
   layout:(()=>{ try{ return localStorage.getItem("fd-layout")||"tiles"; }catch(_){ return "tiles"; } })(),
   compact:(()=>{ try{ return localStorage.getItem("fd-compact")==="true"; }catch(_){ return false; } })(),
   showSpeedChart:(()=>{ try{ return localStorage.getItem("fd-speed-chart")!=="false"; }catch(_){ return true; } })(),
@@ -1494,8 +1498,25 @@ const FILTERS=[
   {id:"cancelled", label:"Cancelled", color:"var(--muted-foreground)"}
 ];
 
+// The category a download's file type belongs to (same rule as
+// paths.category_for on the server), or "Other".
+function categoryOf(d){
+  const ext=(d.name.split(".").length>1 ? d.name.split(".").pop() : "").toLowerCase();
+  const c=(settingsCache.categories||[]).find(c=>ext && c.extensions.includes(ext));
+  return c ? c.name : "Other";
+}
+function renderCategoryFilter(){
+  const sel=document.getElementById("catFilter");
+  if(!sel) return;
+  const names=(settingsCache.categories||[]).map(c=>c.name).concat("Other");
+  if(ui.category!=="all" && !names.includes(ui.category)) ui.category="all";
+  sel.innerHTML='<option value="all">All types</option>'+
+    names.map(n=>'<option value="'+esc(n)+'"'+(ui.category===n?" selected":"")+'>'+esc(n)+'</option>').join("");
+}
+
 function visible(){
   let out=downloads.filter(d=>ui.filter==="all"||d.state===ui.filter);
+  if(ui.category!=="all") out=out.filter(d=>categoryOf(d)===ui.category);
   if(ui.query){ const q=ui.query.toLowerCase();
     out=out.filter(d=>d.name.toLowerCase().includes(q)||d.host.toLowerCase().includes(q)); }
   const s=ui.sort;
@@ -2118,6 +2139,7 @@ document.querySelectorAll("[data-libview]").forEach(b=>b.onclick=()=>{
   renderLibrary();
 });
 document.getElementById("sort").addEventListener("change",e=>{ui.sort=e.target.value;renderList()});
+document.getElementById("catFilter").addEventListener("change",e=>{ui.category=e.target.value;render()});
 // The dock toggle turns the app-wide cap on and off; its value lives in
 // Settings -> Downloads, so turning it off and on again keeps it.
 function renderSpeedLimitBtn(){
@@ -2352,6 +2374,29 @@ function speedLimitParts(bps){
   return bps>=MB && bps%MB===0 ? {value:bps/MB, unit:"MB"} : {value:Math.round(bps/KB), unit:"KB"};
 }
 
+// The defaults paths.DEFAULT_CATEGORIES ships with, for "Restore defaults".
+const DEFAULT_CATEGORIES=[
+  {name:"Video",extensions:["mp4","mkv","mov","webm","avi","vid","m4v"],folder:"Video"},
+  {name:"Audio",extensions:["mp3","wav","aac","m4a","flac","ogg"],folder:"Audio"},
+  {name:"Documents",extensions:["pdf","doc","docx","xls","xlsx","ppt","pptx"],folder:"Documents"},
+  {name:"Archives",extensions:["zip","tar","gz","7z","rar","dmg","pkg","iso"],folder:"Archives"},
+];
+function categoryRow(c){
+  return '<div class="cat-row" style="display:grid;grid-template-columns:1fr 2fr 1fr auto;gap:6px">'+
+    '<input class="input" data-cat="name" aria-label="Category name" placeholder="Name" value="'+esc(c.name)+'">'+
+    '<input class="input mono" data-cat="extensions" aria-label="Extensions" placeholder="mp4, mkv" value="'+esc(c.extensions.join(", "))+'">'+
+    '<input class="input mono" data-cat="folder" aria-label="Folder" placeholder="Folder" value="'+esc(c.folder)+'">'+
+    '<button class="btn btn-ghost btn-icon btn-sm" data-cat-remove aria-label="Remove '+esc(c.name||"category")+'" title="Remove">×</button>'+
+  '</div>';
+}
+function readCategoryRows(box){
+  return [...box.querySelectorAll(".cat-row")].map(r=>({
+    name:r.querySelector('[data-cat="name"]').value.trim(),
+    extensions:r.querySelector('[data-cat="extensions"]').value.split(/[\s,]+/).map(e=>e.replace(/^\./,"").trim()).filter(Boolean),
+    folder:r.querySelector('[data-cat="folder"]').value.trim(),
+  })).filter(c=>c.name||c.extensions.length||c.folder);
+}
+
 function switchRow(t,p,key,on){
   return '<div class="setrow"><div class="txt"><div>'+t+'</div><p>'+p+'</p></div>'+
     '<span class="switch" role="switch" aria-checked="'+on+'" data-setting="'+key+'"></span></div>';
@@ -2400,7 +2445,17 @@ function settingsPanes(){
       '</div>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Applies right away, including to downloads already running. At least 16 KB/s: below that, some servers drop the connection.</p>'+
       '</div>'+
-      switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
+      switchRow("Sort into category folders","Each download goes to its category's folder, by file extension. Files no category claims go to Other.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
+      '<div class="field"><label class="label">Categories</label>'+
+        '<div id="catRows" style="display:flex;flex-direction:column;gap:6px">'+(settingsCache.categories||[]).map(categoryRow).join("")+'</div>'+
+        '<div style="display:flex;gap:8px;margin-top:8px">'+
+          '<button class="btn btn-outline btn-sm" id="catAdd">Add category</button>'+
+          '<button class="btn btn-outline btn-sm" id="catReset">Restore defaults</button>'+
+          '<span style="flex:1"></span>'+
+          '<button class="btn btn-primary btn-sm" id="catSave">Save categories</button>'+
+        '</div>'+
+        '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Extensions are separated by commas (mp4, mkv). A folder is a subfolder of the download folder (Video), or a full path to any existing folder.</p>'+
+      '</div>'+
       '<div class="field"><label class="label" for="setDupPolicy">When a link was already downloaded</label>'+
       '<select class="input" id="setDupPolicy" data-input="duplicate_policy" style="width:auto">'+
         '<option value="rename"'+(settingsCache.duplicate_policy==="rename"?" selected":"")+'>Save as a new file</option>'+
@@ -2515,6 +2570,23 @@ async function settingsDialog(initialTab = "General"){
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }
+    const catBox=dlg.querySelector("#catRows");
+    if(catBox){
+      catBox.addEventListener("click",e=>{ const rm=e.target.closest("[data-cat-remove]"); if(rm) rm.closest(".cat-row").remove(); });
+      dlg.querySelector("#catAdd").onclick=()=>{
+        catBox.insertAdjacentHTML("beforeend",categoryRow({name:"",extensions:[],folder:""}));
+        catBox.lastElementChild.querySelector("input").focus();
+      };
+      dlg.querySelector("#catReset").onclick=()=>{ catBox.innerHTML=DEFAULT_CATEGORIES.map(categoryRow).join(""); };
+      dlg.querySelector("#catSave").onclick=async()=>{
+        try{
+          settingsCache=await patch("/api/settings",{categories:readCategoryRows(catBox)});
+          catBox.innerHTML=settingsCache.categories.map(categoryRow).join("");
+          renderCategoryFilter(); render();
+          toast("ok","Saved — "+settingsCache.categories.length+" categor"+(settingsCache.categories.length===1?"y":"ies"));
+        }catch(err){ toast("err","Couldn't save categories",err.message); }
+      };
+    }
     const siteInput=dlg.querySelector("#setSiteConns"), siteSave=dlg.querySelector("#setSiteConnsSave");
     if(siteInput && siteSave){
       siteInput.addEventListener("keydown",e=>{ if(e.key==="Enter") siteSave.click(); });
@@ -2548,7 +2620,7 @@ async function settingsDialog(initialTab = "General"){
     };
     const resetBtn=dlg.querySelector("#setResetAll");
     if(resetBtn) resetBtn.onclick=async()=>{
-      try{ settingsCache=await post("/api/settings/reset"); refreshTab(); renderSpeedLimitBtn(); toast("ok","Settings reset to defaults"); render(); }
+      try{ settingsCache=await post("/api/settings/reset"); refreshTab(); renderSpeedLimitBtn(); renderCategoryFilter(); toast("ok","Settings reset to defaults"); render(); }
       catch(err){ toast("err","Couldn't reset settings",err.message); }
     };
 
@@ -2951,6 +3023,7 @@ async function boot(){
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
     applyTheme(settingsCache.theme);
     renderSpeedLimitBtn();
+    renderCategoryFilter();
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
   // Start in downloads view. render() below ensures the library count is
   // populated even when downloads were already completed before this session.

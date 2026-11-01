@@ -304,3 +304,25 @@ def test_add_dialog_shows_why_a_checksum_was_refused(ui, server):
             "document.getElementById('addGo').click())")
     assert page.wait_js("document.getElementById('toasts').textContent.includes('MD5, SHA-1 or SHA-256')")
     assert not mgr.tasks
+
+
+def test_categories_editor_saves_and_reports_conflicts(ui):
+    mgr, page = ui()
+    page.js("document.getElementById('settingsBtn').click()")
+    assert page.wait_js("!!document.querySelector('[data-st=\"Downloads\"]')")
+    page.js("document.querySelector('[data-st=\"Downloads\"]').click()")
+    assert page.wait_js("document.querySelectorAll('#catRows .cat-row').length === 4")
+    page.js("(document.getElementById('catAdd').click(),"
+            "(r => (r.querySelector('[data-cat=name]').value = 'Programs',"
+            " r.querySelector('[data-cat=extensions]').value = '.exe, msi',"
+            " r.querySelector('[data-cat=folder]').value = 'Programs'))"
+            "(document.querySelector('#catRows').lastElementChild),"
+            "document.getElementById('catSave').click())")
+    assert page.wait_js("settingsCache.categories.length === 5")
+    assert mgr.settings.categories[-1] == {"name": "Programs", "extensions": ["exe", "msi"], "folder": "Programs"}
+    assert page.wait_js("[...document.getElementById('catFilter').options].some(o => o.value === 'Programs')")
+    # A clash is refused with the server's own explanation, not "[object Object]".
+    page.js("(document.querySelector('#catRows').lastElementChild.querySelector('[data-cat=extensions]').value = 'mp4',"
+            "document.getElementById('catSave').click())")
+    assert page.wait_js("document.getElementById('toasts').textContent.includes('.mp4 is in both Video and Programs')")
+    assert mgr.settings.categories[-1]["extensions"] == ["exe", "msi"]

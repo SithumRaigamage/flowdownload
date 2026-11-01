@@ -33,7 +33,7 @@ def queue_download(storage: Storage, settings: Settings, url: str, filename: str
     copy they already had. Raises RuntimeError if no free filename is found.
     """
     if settings.auto_folder_by_type:
-        dest_path = apply_auto_folder_for_path(filename, settings.download_dir)
+        dest_path = apply_auto_folder_for_path(filename, settings.download_dir, settings.categories)
     else:
         dest_path = os.path.join(settings.download_dir, filename)
 

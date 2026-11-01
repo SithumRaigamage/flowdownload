@@ -4,6 +4,8 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 
+from app.engine.paths import default_categories, validate_categories
+
 
 def _default_download_dir() -> str:
     return os.path.join(os.path.expanduser("~"), "Downloads")
@@ -18,6 +20,9 @@ class Settings:
     # When True, new downloads are routed to <download_dir>/<type>/<file>
     # based on extension. Off by default to preserve existing user behavior.
     auto_folder_by_type: bool = False
+    # [{name, extensions, folder}, ...]: where auto_folder_by_type sends each
+    # file type (paths.category_for). Edited in Settings -> Downloads.
+    categories: list = field(default_factory=default_categories)
     # What to do when a URL matches a completed download: "rename" keeps
     # both files (today's default -- a new filename is picked automatically),
     # "skip" reuses the existing completed task instead of downloading again,
@@ -68,6 +73,12 @@ class Settings:
             # later; fall back to that one setting's default instead.
             expected = type(getattr(defaults, key))
             if expected is int and isinstance(value, bool):
+                continue
+            if key == "categories":
+                try:
+                    known[key] = validate_categories(value, check_folders=False)
+                except ValueError:
+                    pass  # a broken hand edit: keep the defaults rather than misfile downloads
                 continue
             if isinstance(value, expected):
                 known[key] = value
