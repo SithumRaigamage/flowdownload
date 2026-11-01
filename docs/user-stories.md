@@ -68,4 +68,4 @@ dashboard, and a colourful bento) and a media-first Library view.
 
 **As a user**, the Library view is live — when a new download completes, it immediately appears in the Library grid alongside the existing items.
 
-**As a user**, I can still open a completed download's detail sheet (the right-hand panel) to see its full metadata, timeline, and headers.
+**As a user**, I can still open a completed download's detail sheet (the right-hand panel) with two tabs: an overview (status, progress, speed, connections, time left and where it's saved) and a preview. The event timeline, log and HTTP headers are left out on purpose: they're debugging detail, not something a user needs.
