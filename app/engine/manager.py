@@ -252,6 +252,18 @@ class DownloadManager(QObject):
             return
         self._spawn(task_id)
 
+    def set_speed_limit(self, task_id: str, bps: int) -> None:
+        """Cap one download at `bps` bytes/s (0 removes the cap), including
+        while it runs."""
+        task = self.tasks[task_id]
+        task.speed_limit_bps = max(0, bps)
+        task.updated_at = time.time()
+        self.storage.save(task)
+        worker = self._workers.get(task_id)
+        if worker is not None:
+            worker.task_limiter.set_rate(task.speed_limit_bps)
+        self.task_updated.emit(task_id)
+
     def retry(self, task_id: str) -> None:
         self.start(task_id)
 
@@ -469,7 +481,7 @@ class DownloadManager(QObject):
             task.id, task.url, task.dest_path, task.etag, task.last_modified,
             task.cookie_header, self._session, referrer=task.referrer,
             max_connections=task.connections, limiter=self.limiter,
-            expected_checksum=task.expected_checksum,
+            speed_limit_bps=task.speed_limit_bps, expected_checksum=task.expected_checksum,
         )
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)

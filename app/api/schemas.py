@@ -34,6 +34,7 @@ class DownloadOut(BaseModel):
     expected_checksum: str
     checksum_status: Literal["", "verified", "mismatch"]
     checksum_source: str
+    speed_limit_bps: int
     referrer: str
     connections: int
     # [[start, done, end], ...] byte ranges of a split download, for the UI's
@@ -67,6 +68,7 @@ class DownloadOut(BaseModel):
             expected_checksum=task.expected_checksum,
             checksum_status=task.checksum_status if task.checksum_status in ("verified", "mismatch") else "",
             checksum_source=task.checksum_source,
+            speed_limit_bps=task.speed_limit_bps,
             referrer=task.referrer,
             connections=task.connections,
             segments=task.segments,
@@ -193,6 +195,18 @@ class SettingsPatch(BaseModel):
         # download failing on write.
         if value is not None and not (os.path.isabs(value) and os.path.isdir(value)):
             raise ValueError("Download folder must be an existing folder")
+        return value
+
+
+class DownloadPatch(BaseModel):
+    # This download's own cap; 0 removes it. Same bounds as the app-wide one.
+    speed_limit_bps: int = Field(ge=0, le=MAX_SPEED_LIMIT_BPS)
+
+    @field_validator("speed_limit_bps")
+    @classmethod
+    def _zero_or_at_least_minimum(cls, value: int) -> int:
+        if 0 < value < MIN_SPEED_LIMIT_BPS:
+            raise ValueError(f"Speed limit must be at least {MIN_SPEED_LIMIT_BPS // 1024} KB/s")
         return value
 
 

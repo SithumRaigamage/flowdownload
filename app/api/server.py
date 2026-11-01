@@ -24,6 +24,7 @@ from app.api.schemas import (
     DedupeCheckResponse,
     DiskInfo,
     DownloadOut,
+    DownloadPatch,
     HistoryEntry,
     NewDownloadRequest,
     PickFolderResponse,
@@ -377,6 +378,12 @@ def create_app(
             return executor.call(lambda: _act_and_return(lambda tid: manager.refresh_url(tid, body.url), task_id))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/downloads/{task_id}", response_model=DownloadOut)
+    def patch_download(task_id: str, body: DownloadPatch, _=Depends(require_token)):
+        return executor.call(
+            lambda: _act_and_return(lambda tid: manager.set_speed_limit(tid, body.speed_limit_bps), task_id)
+        )
 
     def _act_and_return(fn, task_id: str) -> DownloadOut:
         if task_id not in manager.tasks:

@@ -73,7 +73,8 @@ class Storage:
                                   ("accept_ranges", "INTEGER DEFAULT 0"),
                                   ("expected_checksum", "TEXT DEFAULT ''"),
                                   ("checksum_status", "TEXT DEFAULT ''"),
-                                  ("checksum_source", "TEXT DEFAULT ''")):
+                                  ("checksum_source", "TEXT DEFAULT ''"),
+                                  ("speed_limit_bps", "INTEGER DEFAULT 0")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
         # Two processes (this app and the Chrome native host, launched fresh
@@ -112,8 +113,9 @@ class Storage:
                     (id, url, dest_path, filename, total_bytes, downloaded_bytes,
                      status, error_message, etag, last_modified, cookie_header,
                      digest_sha256, digest_verified, referrer, accept_ranges,
-                     expected_checksum, checksum_status, checksum_source, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     expected_checksum, checksum_status, checksum_source, speed_limit_bps,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -132,6 +134,7 @@ class Storage:
                     expected_checksum=excluded.expected_checksum,
                     checksum_status=excluded.checksum_status,
                     checksum_source=excluded.checksum_source,
+                    speed_limit_bps=excluded.speed_limit_bps,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -166,7 +169,7 @@ class Storage:
         "id, url, dest_path, filename, total_bytes, downloaded_bytes, "
         "status, error_message, etag, last_modified, cookie_header, "
         "digest_sha256, digest_verified, referrer, accept_ranges, "
-        "expected_checksum, checksum_status, checksum_source, created_at, updated_at"
+        "expected_checksum, checksum_status, checksum_source, speed_limit_bps, created_at, updated_at"
     )
 
     def load_all(self) -> list[DownloadTask]:

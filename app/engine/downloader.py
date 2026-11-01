@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 import requests
@@ -102,7 +103,7 @@ class DownloadWorker(QThread):
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, referrer: str = "",
                  max_connections: int = 1, limiter: RateLimiter | None = None,
-                 expected_checksum: str = "", parent=None):
+                 speed_limit_bps: int = 0, expected_checksum: str = "", parent=None):
         super().__init__(parent)
         # Deliberately plain values/instance attributes, not a reference to the
         # manager's shared DownloadTask: this thread mutates them freely as it
@@ -128,6 +129,10 @@ class DownloadWorker(QThread):
         self.max_connections = max_connections
         # The manager's app-wide speed cap; unlimited when none is given.
         self.limiter = limiter or RateLimiter()
+        # This download's own cap. One bucket per worker, so a split
+        # download's connections share it; the manager changes its rate
+        # in place when the user edits the cap mid-transfer.
+        self.task_limiter = RateLimiter(speed_limit_bps)
         self._session = session
         self._pause_event = threading.Event()
         self._cancel_event = threading.Event()
@@ -151,6 +156,11 @@ class DownloadWorker(QThread):
     def cancel(self) -> None:
         self._cancel_event.set()
         self._pause_event.set()
+
+    def throttle(self, n: int, stopped: Callable[[], bool]) -> bool:
+        """Take `n` bytes from this download's cap, then the app-wide one.
+        False if `stopped()` turned true while held back (pause/cancel)."""
+        return self.task_limiter.consume(n, stopped) and self.limiter.consume(n, stopped)
 
     def _complete(self, downloaded: int) -> None:
         """Verify size, rename into place, hash, and report COMPLETED.
@@ -390,7 +400,7 @@ class DownloadWorker(QThread):
                     raise Paused()
                 if not chunk:
                     continue
-                if not self.limiter.consume(len(chunk), self._pause_event.is_set):
+                if not self.throttle(len(chunk), self._pause_event.is_set):
                     raise Paused()  # paused or cancelled while held back by the speed limit
                 f.write(chunk)
                 downloaded += len(chunk)

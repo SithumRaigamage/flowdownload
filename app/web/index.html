@@ -733,7 +733,7 @@ function normalize(t){
     size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
     error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
     referrer:t.referrer||"", connections:t.connections||0, segments:t.segments||[], hasCookie:t.has_cookie, acceptRanges:t.accept_ranges,
-    sha256:t.digest_sha256||"", expectedChecksum:t.expected_checksum||"", checksumStatus:t.checksum_status||"", checksumSource:t.checksum_source||"", added:t.created_at*1000, updatedAt:t.updated_at*1000
+    sha256:t.digest_sha256||"", expectedChecksum:t.expected_checksum||"", checksumStatus:t.checksum_status||"", checksumSource:t.checksum_source||"", speedLimitBps:t.speed_limit_bps||0, added:t.created_at*1000, updatedAt:t.updated_at*1000
   };
 }
 function upsert(raw){
@@ -1743,6 +1743,30 @@ function checksumText(d){
   if(d.state!=="completed") return d.expectedChecksum?'Will be checked against the '+esc(d.expectedChecksum.split(":")[0].toUpperCase())+' you entered':'Checked when the download finishes';
   return 'Not checked — no checksum was given or published'+(d.sha256?sha:"");
 }
+// The detail sheet's own speed cap for an unfinished download: value, unit, Save and Remove.
+function speedCapHTML(d){
+  if(d.state==="completed"||d.state==="cancelled") return "";
+  const p=speedLimitParts(d.speedLimitBps);
+  const app=settingsCache&&settingsCache.speed_limit_enabled?' The app-wide limit of '+fmtSpeed(settingsCache.speed_limit_bps)+' also applies.':'';
+  return '<dt>Speed limit</dt><dd><div class="speed-cap" style="display:flex;gap:6px;align-items:center">'+
+      '<input class="input mono" type="number" min="1" step="1" id="sheetSpeed" value="'+esc(p.value)+'" aria-label="Speed limit for this download" style="width:80px">'+
+      '<select class="input" id="sheetSpeedUnit" aria-label="Speed limit unit" style="width:auto">'+
+        ['KB','MB'].map(u=>'<option value="'+u+'"'+(p.unit===u?' selected':'')+'>'+u+'/s</option>').join('')+
+      '</select>'+
+      '<button class="btn btn-outline btn-sm" id="sheetSpeedSave">'+(d.speedLimitBps?'Change':'Limit')+'</button>'+
+      (d.speedLimitBps?'<button class="btn btn-ghost btn-sm" id="sheetSpeedOff">Remove</button>':'')+
+    '</div><div style="font-size:11px;color:var(--muted-foreground);margin-top:4px">'+
+      (d.speedLimitBps?'Capped at '+fmtSpeed(d.speedLimitBps)+', shared by all its connections.':'No limit of its own.')+app+
+    '</div></dd>';
+}
+async function setDownloadSpeedLimit(d,bps){
+  try{
+    upsert(await patch("/api/downloads/"+encodeURIComponent(d.id),{speed_limit_bps:bps}));
+    if(document.activeElement) document.activeElement.blur();  // drop the draft so the saved value shows
+    renderSheet();
+    toast("ok",bps?"Limited to "+fmtSpeed(bps):"Speed limit removed",d.name);
+  }catch(err){ toast("err","Couldn't set the speed limit",err.message); }
+}
 function renderSheet(){
   const sheet=document.getElementById("sheet");
   const d=downloads.find(x=>x.id===ui.activeId);
@@ -1758,6 +1782,7 @@ function renderSheet(){
       '<dt>Status</dt><dd><span class="badge badge-'+d.state+'">'+d.state+'</span></dd>'+
       '<dt>Progress</dt><dd class="mono">'+fmtBytes(d.received)+' / '+fmtBytes(d.size)+' ('+Math.round(pct(d)*100)+'%)</dd>'+
       '<dt>Speed</dt><dd class="mono">'+fmtSpeed(d.speedBps)+'</dd>'+
+      speedCapHTML(d)+
       '<dt>Connections</dt><dd class="mono">'+((d.state==="downloading"||d.state==="retrying") && d.connections ? d.connections : "—")+'</dd>'+
       '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading" && d.speedBps>0 ? fmtEta((d.size-d.received)/d.speedBps) : "—")+'</dd>'+
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
@@ -1803,6 +1828,11 @@ function renderSheet(){
     }
   }
 
+  // The sheet is rebuilt on every progress tick (4/s); keep a speed limit
+  // that's being typed, and its focus, instead of resetting it each time.
+  const focused=document.activeElement, capInput=sheet.querySelector("#sheetSpeed"), capUnit=sheet.querySelector("#sheetSpeedUnit");
+  const draft=focused&&(focused===capInput||focused===capUnit)?{id:focused.id,value:capInput.value,unit:capUnit.value}:null;
+
   sheet.innerHTML=
     '<div class="sheet-head"><div class="t">'+
       '<div class="ficon" data-kind="'+kindOf(d.name)+'">'+extOf(d.name)+'</div>'+
@@ -1827,6 +1857,19 @@ function renderSheet(){
   sheet.querySelector("#closeSheet").onclick=()=>{ui.activeId=null;render()};
   sheet.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;renderSheet()});
   sheet.querySelectorAll("[data-act]").forEach(b=>b.onclick=()=>act(b.dataset.id,b.dataset.act));
+
+  const capSave=sheet.querySelector("#sheetSpeedSave");
+  if(capSave){
+    const input=sheet.querySelector("#sheetSpeed"), unit=sheet.querySelector("#sheetSpeedUnit");
+    if(draft){ input.value=draft.value; unit.value=draft.unit; sheet.querySelector("#"+draft.id).focus(); }
+    input.addEventListener("keydown",e=>{ if(e.key==="Enter") capSave.click(); });
+    capSave.onclick=()=>{
+      const kb=Math.round((+input.value||0)*(unit.value==="MB"?1024:1));
+      setDownloadSpeedLimit(d,Math.max(SPEED_MIN_KB,Math.min(SPEED_MAX_KB,kb))*KB);
+    };
+    const off=sheet.querySelector("#sheetSpeedOff");
+    if(off) off.onclick=()=>setDownloadSpeedLimit(d,0);
+  }
 }
 
 let logFetchInFlight=false;

@@ -52,7 +52,7 @@ downloads, supported protocols, and distribution.
 | Feature | IDM | AB DM | Gopeed | XDM | JDownloader | aria2 / Motrix / Persepolis | FlowDownload |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Multi-connection with dynamic splitting | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Speed limiter | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Speed limiter | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Multiple queues + scheduler | ✅ | ✅ | – | ✅ | ✅ | ✅ (Persepolis) | ❌ one global queue |
 | Categories → folders | ✅ | ✅ | – | ✅ | ✅ | – | 🟡 by file type only |
 | Video / stream grabber (HLS, DASH) | ✅ | ✅ HLS | via extensions | ✅ | ✅ | – | ❌ |
@@ -74,17 +74,17 @@ Why first: these are the features IDM users notice are missing straight away.
 They only touch code we control (no browser or third-party changes), and they
 fit the current engine.
 
-### 1.1 Speed limiter — global cap built; per-download cap left — S
+### 1.1 Speed limiter — built; speed schedules left — S
 **Built:** an app-wide cap (`speed_limit_enabled` + `speed_limit_bps` in
 `Settings`), enforced by one shared token bucket (`app/engine/throttle.py`)
 that every chunk loop draws from: `DownloadWorker._stream_to_file` and
 `_Run._fetch`. It has an on/off toggle in the dock, and the value lives in
-Settings → Downloads.
+Settings → Downloads. Each download can also have its own cap
+(`DownloadTask.speed_limit_bps`, set in the detail sheet through
+`PATCH /api/downloads/{id}`): a second bucket per worker, shared by its
+connections, taken from before the global one (`DownloadWorker.throttle`).
 
 **Left:**
-- An optional per-download cap on `DownloadTask`: needs a DB column (a
-  migration in `Storage._migrate`), a field in the detail sheet, and a second
-  limiter per worker, consumed alongside the global one.
 - Speed schedules, e.g. limit during working hours. This builds on 1.2.
 
 ### 1.2 Multiple queues and a scheduler — M
@@ -281,8 +281,7 @@ in what's already in `chrome://downloads`.
 All of it runs against a local `http.server` fixture. Not covered: the Qt
 tray/window layer, an actual ffmpeg transcode (only its failure and caching
 paths), the extension popup, and real Chrome. Each phase above should add tests
-for what it builds. In particular, the speed limiter needs a test that checks
-the total rate across a split download's connections.
+for what it builds.
 
 ## What we deliberately won't copy
 

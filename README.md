@@ -101,7 +101,8 @@ that environment.
 - **An optional speed limit caps all downloads together** (the dock's
   "Speed limit" button, value in Settings → Downloads, off by default). It's
   one shared cap across every download and connection, and changing it
-  applies to downloads already running.
+  applies to downloads already running. A single download can also get its
+  own cap in its details; both apply, so the lower one wins.
 - **"Downloads at once" decides how many files run.** An optional per-site
   cap (Settings → Downloads → "Connections per site", 0 = off by default;
   every `*.trafficdeposit.com` host counts as one site) can be set for CDNs

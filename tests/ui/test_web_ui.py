@@ -240,6 +240,25 @@ def test_speed_limit_value_saves(ui):
     assert page.wait_js("settingsCache.speed_limit_bps === 512 * 1024")
     assert mgr.settings.speed_limit_bps == 512 * 1024
 
+def test_detail_sheet_sets_and_removes_a_download_speed_limit(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/file.bin?delay=0.05", "file.bin")]
+    mgr.pause(task.id)
+    assert wait(lambda: task.status == S.PAUSED)
+    page.js(f"(ui.activeId = '{task.id}', ui.tab = 'overview', renderSheet())")
+    assert page.wait_js("!!document.getElementById('sheetSpeedSave')")
+    # A re-render mid-typing (a progress tick) keeps what's typed.
+    page.js("(document.getElementById('sheetSpeed').focus(), document.getElementById('sheetSpeed').value = '512',"
+            "document.getElementById('sheetSpeedUnit').value = 'KB', renderSheet())")
+    assert page.js("document.getElementById('sheetSpeed').value") == "512"
+    page.js("document.getElementById('sheetSpeedSave').click()")
+    assert wait(lambda: task.speed_limit_bps == 512 * 1024)
+    assert page.wait_js("document.getElementById('sheet').textContent.includes('Capped at')")
+    page.js("document.getElementById('sheetSpeedOff').click()")
+    assert wait(lambda: task.speed_limit_bps == 0)
+    assert page.wait_js("document.getElementById('sheet').textContent.includes('No limit of its own')")
+
+
 def test_reconnect_resyncs_events_missed_while_disconnected(ui, server, wait):
     mgr, page = ui()
     # Drop the socket and add a download before it reconnects (~1 s later):
