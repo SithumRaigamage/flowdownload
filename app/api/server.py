@@ -29,6 +29,9 @@ from app.api.schemas import (
     NewDownloadRequest,
     PickFolderResponse,
     ProbeResponse,
+    QueueIn,
+    QueueOut,
+    QueuePatch,
     RefreshUrlRequest,
     SettingsOut,
     SettingsPatch,
@@ -38,6 +41,7 @@ from app.engine.manager import DownloadManager
 from app.engine.models import DownloadStatus
 from app.engine.paths import prune_empty_auto_folder_dir
 from app.engine.probe import guess_filename_from_url, probe_remote_filename
+from app.engine.queues import Queue
 from app.engine.settings import Settings
 from app.media import transcode
 from app.version import APP_VERSION, build_date_label, build_label
@@ -293,7 +297,7 @@ def create_app(
     @app.post("/api/downloads", response_model=DownloadOut, status_code=201)
     def create_download(body: NewDownloadRequest, _=Depends(require_token)):
         def _create():
-            task_id = manager.add_download(body.url, body.filename, body.checksum)
+            task_id = manager.add_download(body.url, body.filename, body.checksum, body.queue_id)
             return DownloadOut.from_task(manager.tasks[task_id])
 
         try:
@@ -381,9 +385,16 @@ def create_app(
 
     @app.patch("/api/downloads/{task_id}", response_model=DownloadOut)
     def patch_download(task_id: str, body: DownloadPatch, _=Depends(require_token)):
-        return executor.call(
-            lambda: _act_and_return(lambda tid: manager.set_speed_limit(tid, body.speed_limit_bps), task_id)
-        )
+        def _patch(tid: str) -> None:
+            if body.speed_limit_bps is not None:
+                manager.set_speed_limit(tid, body.speed_limit_bps)
+            if body.queue_id is not None:
+                manager.set_queue(tid, body.queue_id)
+
+        try:
+            return executor.call(lambda: _act_and_return(_patch, task_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def _act_and_return(fn, task_id: str) -> DownloadOut:
         if task_id not in manager.tasks:
@@ -716,6 +727,55 @@ def create_app(
             return SettingsOut.from_settings(fresh)
 
         return executor.call(_reset)
+
+    def _queue_out(queue_id: str) -> QueueOut:
+        return QueueOut.from_queue(manager.queues[queue_id], manager.is_queue_open(queue_id),
+                                   manager.queue_opens_at(queue_id))
+
+    def _known_queue(queue_id: str) -> None:
+        if queue_id not in manager.queues:
+            raise HTTPException(status_code=404, detail="No such queue")
+
+    @app.get("/api/queues", response_model=list[QueueOut])
+    def list_queues(_=Depends(require_token)):
+        # Named queues only; the UI lists the built-in Main queue itself.
+        return executor.call(lambda: [_queue_out(q) for q in manager.queues])
+
+    @app.post("/api/queues", response_model=QueueOut, status_code=201)
+    def create_queue(body: QueueIn, _=Depends(require_token)):
+        def _create():
+            fields = body.model_dump()
+            queue = manager.add_queue(Queue(**{**fields, "days": tuple(fields["days"])}))
+            return _queue_out(queue.id)
+
+        try:
+            return executor.call(_create)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/api/queues/{queue_id}", response_model=QueueOut)
+    def patch_queue(queue_id: str, body: QueuePatch, _=Depends(require_token)):
+        def _update():
+            _known_queue(queue_id)
+            changes = {k: v for k, v in body.model_dump().items() if v is not None}
+            if "days" in changes:
+                changes["days"] = tuple(changes["days"])
+            manager.update_queue(queue_id, **changes)
+            return _queue_out(queue_id)
+
+        try:
+            return executor.call(_update)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/queues/{queue_id}")
+    def delete_queue(queue_id: str, _=Depends(require_token)):
+        def _delete():
+            _known_queue(queue_id)
+            manager.delete_queue(queue_id)
+
+        executor.call(_delete)
+        return {"ok": True}
 
     @app.get("/api/disk", response_model=DiskInfo)
     def disk_info(_=Depends(require_token)):

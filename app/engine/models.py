@@ -53,6 +53,8 @@ class DownloadTask:
     # This download's own speed cap in bytes/s, shared by all its
     # connections; 0 = none. The app-wide cap still applies on top.
     speed_limit_bps: int = 0
+    # The named queue this download waits in (app/engine/queues.py); "" = Main.
+    queue_id: str = ""
     # Page the download was started from, sent as the Referer header. Many
     # CDNs refuse (or throttle) requests that arrive without one.
     referrer: str = ""
@@ -104,6 +106,7 @@ class DownloadTask:
             self.checksum_status,
             self.checksum_source,
             self.speed_limit_bps,
+            self.queue_id,
             self.created_at,
             self.updated_at,
         )
@@ -115,7 +118,7 @@ class DownloadTask:
             status, error_message, etag, last_modified, cookie_header,
             digest_sha256, digest_verified, referrer, accept_ranges,
             expected_checksum, checksum_status, checksum_source, speed_limit_bps,
-            created_at, updated_at,
+            queue_id, created_at, updated_at,
         ) = row
         return cls(
             id=id_,
@@ -137,6 +140,7 @@ class DownloadTask:
             checksum_status=checksum_status or "",
             checksum_source=checksum_source or "",
             speed_limit_bps=speed_limit_bps or 0,
+            queue_id=queue_id or "",
             created_at=created_at,
             updated_at=updated_at,
         )

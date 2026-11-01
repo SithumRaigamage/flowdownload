@@ -109,6 +109,11 @@ that environment.
   that answer 503 under many parallel streams (about 12 for
   trafficdeposit.com). When it's set, a split download uses several of its
   connections, and extra downloads wait in the queue with the reason shown.
+- **Named queues can run on a schedule** (Settings → Queues). Each has its
+  own "downloads at once" and optional hours and weekdays, e.g. 22:00–06:00.
+  At the stop time its downloads stop and wait, then carry on at the next
+  start, and you're notified when a queue's last download finishes. Pick a
+  queue when adding a download or in its details; Chrome's go to Main.
 - **Chrome's page address is sent as the Referer**, since many CDNs refuse
   or throttle downloads without one.
 - **Expired links can be refreshed**: right-click an unfinished download →
@@ -221,7 +226,7 @@ On Windows, uninstalling FlowDownload removes the registration.
 
 ## Roadmap
 
-Known gaps and possible future work (code signing, queues and scheduling,
-etc.) are
+Known gaps and possible future work (code signing, proxies, a video
+grabber, etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 

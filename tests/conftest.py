@@ -10,6 +10,7 @@ import os
 import socket
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -186,9 +187,9 @@ def make_manager(qapp, tmp_path):
     """
     made = []
 
-    def _make(db_name="t.db", **settings):
+    def _make(db_name="t.db", clock=datetime.now, **settings):
         settings.setdefault("download_dir", str(tmp_path / "dl"))
-        mgr = DownloadManager(Storage(str(tmp_path / db_name)), Settings(**settings))
+        mgr = DownloadManager(Storage(str(tmp_path / db_name)), Settings(**settings), clock=clock)
         made.append(mgr)
         return mgr
 

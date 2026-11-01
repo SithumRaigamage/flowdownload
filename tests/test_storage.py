@@ -30,6 +30,8 @@ def test_old_database_gains_referrer_column(tmp_path):
     storage = Storage(str(db))
     (task,) = storage.load_all()
     assert task.referrer == ""
+    assert task.queue_id == ""  # every existing download lands in Main
+    assert storage.load_queues() == []
     task.referrer = "https://page.test/"
     storage.save(task)
     assert Storage(str(db)).load_all()[0].referrer == "https://page.test/"

@@ -694,6 +694,8 @@ const del = (path)=>api(path, {method:"DELETE"});
 let downloads = [];
 let settingsCache = {download_dir:"~/Downloads", max_concurrent_downloads:3, notifications_enabled:true, minimize_to_tray:false, duplicate_policy:"rename",
   theme:(()=>{ try{ return localStorage.getItem("fd-theme")||"system"; }catch(_){ return "system"; } })()};
+// Named queues from /api/queues; Main (id "") is built in and never listed there.
+let queuesCache = [];
 let diskCache = null;
 let chromeCache = null;
 let sheetLog = {id:null, entries:[]};
@@ -733,7 +735,7 @@ function normalize(t){
     size:t.total_bytes, received:t.downloaded_bytes, speedBps:t.speed_bps, state:t.status,
     error:t.error_message || null, etag:t.etag, lastModified:t.last_modified,
     referrer:t.referrer||"", connections:t.connections||0, segments:t.segments||[], hasCookie:t.has_cookie, acceptRanges:t.accept_ranges,
-    sha256:t.digest_sha256||"", expectedChecksum:t.expected_checksum||"", checksumStatus:t.checksum_status||"", checksumSource:t.checksum_source||"", speedLimitBps:t.speed_limit_bps||0, added:t.created_at*1000, updatedAt:t.updated_at*1000
+    sha256:t.digest_sha256||"", expectedChecksum:t.expected_checksum||"", checksumStatus:t.checksum_status||"", checksumSource:t.checksum_source||"", speedLimitBps:t.speed_limit_bps||0, queueId:t.queue_id||"", added:t.created_at*1000, updatedAt:t.updated_at*1000
   };
 }
 function upsert(raw){
@@ -1533,11 +1535,72 @@ function visible(){
 // without this row receiving an update of its own.
 function waitReason(d){
   if(d.state!=="queued") return "";
+  const q=queueById(d.queueId);
+  if(q && !q.is_open) return "Queue "+q.name+" starts "+fmtOpensAt(q.opens_at);
   const active=downloads.filter(x=>x.state==="downloading"||x.state==="retrying");
-  // Only "Downloads at once" queues; the per-site limit just lowers how
-  // many connections each download gets.
+  // Only "Downloads at once" and the download's queue hold it back; the
+  // per-site limit just lowers how many connections each download gets.
   if(active.length>=settingsCache.max_concurrent_downloads) return "Waiting for a free slot";
+  if(q && active.filter(x=>x.queueId===q.id).length>=q.max_concurrent) return "Waiting for a free slot in "+q.name;
   return "";
+}
+
+/* ---------- queues ---------- */
+const MAIN_QUEUE={id:"", name:"Main"};
+const DAY_NAMES=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];  // index = the server's weekday (0 = Monday)
+const queueById = id => queuesCache.find(q=>q.id===id);
+const fmtMinute = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+// "at 22:00", "tomorrow at 22:00" or "on Mon at 22:00", in local time.
+function fmtOpensAt(ts){
+  if(!ts) return "later";
+  const t=new Date(ts*1000), now=new Date(), at="at "+fmtMinute(t.getHours()*60+t.getMinutes());
+  const days=Math.round((new Date(t).setHours(0,0,0,0)-new Date(now).setHours(0,0,0,0))/86400000);
+  return days===0 ? at : days===1 ? "tomorrow "+at : "on "+DAY_NAMES[(t.getDay()+6)%7]+" "+at;
+}
+function queueOptions(selected){
+  return [MAIN_QUEUE,...queuesCache].map(q=>'<option value="'+esc(q.id)+'"'+(q.id===selected?" selected":"")+'>'+esc(q.name)+'</option>').join("");
+}
+async function reloadQueues(){
+  try{ queuesCache=await getJSON("/api/queues"); }catch(_){ return; }
+  render();
+}
+function queueRow(q){
+  const days=new Set(q.days);
+  const unfinished=downloads.filter(d=>d.queueId===q.id && !["completed","cancelled","failed"].includes(d.state)).length;
+  const status=!q.id ? "New queue"
+    : (q.is_open ? "Open now" : "Closed, starts "+fmtOpensAt(q.opens_at))+" · "+unfinished+" unfinished";
+  return '<div class="queue-row" data-queue="'+esc(q.id)+'" style="border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px">'+
+    '<div style="display:flex;gap:6px;align-items:center">'+
+      '<input class="input" data-q="name" aria-label="Queue name" placeholder="Name, e.g. Night" maxlength="40" value="'+esc(q.name)+'" style="flex:1">'+
+      '<input class="input mono" type="number" min="1" max="50" step="1" data-q="max" aria-label="Downloads at once in this queue" value="'+esc(q.max_concurrent)+'" style="width:64px">'+
+      '<span style="font-size:11px;color:var(--muted-foreground)">at once</span>'+
+    '</div>'+
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px">'+
+      '<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-q="scheduled"'+(q.scheduled?" checked":"")+'> Only run from</label>'+
+      '<input class="input mono" type="time" data-q="start" aria-label="Start time" value="'+fmtMinute(q.start_minute)+'" style="width:auto">'+
+      '<span>to</span>'+
+      '<input class="input mono" type="time" data-q="stop" aria-label="Stop time" value="'+fmtMinute(q.stop_minute)+'" style="width:auto">'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">'+DAY_NAMES.map((n,i)=>
+      '<label style="font-size:11.5px;display:flex;gap:3px;align-items:center"><input type="checkbox" data-q-day="'+i+'"'+(days.has(i)?" checked":"")+'>'+n+'</label>').join("")+
+    '</div>'+
+    '<div style="display:flex;gap:8px;align-items:center"><span style="flex:1;font-size:11px;color:var(--muted-foreground)">'+esc(status)+'</span>'+
+      (q.id?'<button class="btn btn-ghost btn-sm" data-q-delete style="color:var(--destructive)">Delete</button>'
+           :'<button class="btn btn-ghost btn-sm" data-q-discard>Discard</button>')+
+      '<button class="btn btn-primary btn-sm" data-q-save>'+(q.id?"Save":"Create queue")+'</button></div>'+
+  '</div>';
+}
+function readQueueRow(row){
+  const val=sel=>row.querySelector(sel).value;
+  const minutes=v=>{ const [h,m]=(v||"00:00").split(":").map(Number); return (h||0)*60+(m||0); };
+  return {
+    name:val('[data-q="name"]').trim(),
+    max_concurrent:Math.max(1,Math.min(50,Math.round(+val('[data-q="max"]'))||1)),
+    scheduled:row.querySelector('[data-q="scheduled"]').checked,
+    start_minute:minutes(val('[data-q="start"]')),
+    stop_minute:minutes(val('[data-q="stop"]')),
+    days:[...row.querySelectorAll("[data-q-day]")].filter(c=>c.checked).map(c=>+c.dataset.qDay),
+  };
 }
 
 // 403/410 on a download that used to work usually means a signed link expired.
@@ -1759,6 +1822,18 @@ function speedCapHTML(d){
       (d.speedLimitBps?'Capped at '+fmtSpeed(d.speedLimitBps)+', shared by all its connections.':'No limit of its own.')+app+
     '</div></dd>';
 }
+// Which queue an unfinished download waits in; only once there's a choice.
+function queuePickHTML(d){
+  if(!queuesCache.length || ["completed","cancelled"].includes(d.state)) return "";
+  return '<dt>Queue</dt><dd><select class="input" id="sheetQueue" aria-label="Queue for this download" style="width:auto">'+queueOptions(d.queueId)+'</select></dd>';
+}
+async function moveToQueue(d,queueId){
+  try{
+    upsert(await patch("/api/downloads/"+encodeURIComponent(d.id),{queue_id:queueId}));
+    render();
+    toast("ok","Moved to "+(queueById(queueId)||MAIN_QUEUE).name,d.name);
+  }catch(err){ toast("err","Couldn't move the download",err.message); }
+}
 async function setDownloadSpeedLimit(d,bps){
   try{
     upsert(await patch("/api/downloads/"+encodeURIComponent(d.id),{speed_limit_bps:bps}));
@@ -1783,6 +1858,7 @@ function renderSheet(){
       '<dt>Progress</dt><dd class="mono">'+fmtBytes(d.received)+' / '+fmtBytes(d.size)+' ('+Math.round(pct(d)*100)+'%)</dd>'+
       '<dt>Speed</dt><dd class="mono">'+fmtSpeed(d.speedBps)+'</dd>'+
       speedCapHTML(d)+
+      queuePickHTML(d)+
       '<dt>Connections</dt><dd class="mono">'+((d.state==="downloading"||d.state==="retrying") && d.connections ? d.connections : "—")+'</dd>'+
       '<dt>Time left</dt><dd class="mono">'+(d.state==="downloading" && d.speedBps>0 ? fmtEta((d.size-d.received)/d.speedBps) : "—")+'</dd>'+
       '<dt>Save to</dt><dd class="mono" style="font-size:10.5px">'+esc(d.dest)+'</dd>'+
@@ -1832,6 +1908,7 @@ function renderSheet(){
   // that's being typed, and its focus, instead of resetting it each time.
   const focused=document.activeElement, capInput=sheet.querySelector("#sheetSpeed"), capUnit=sheet.querySelector("#sheetSpeedUnit");
   const draft=focused&&(focused===capInput||focused===capUnit)?{id:focused.id,value:capInput.value,unit:capUnit.value}:null;
+  const queueFocused=!!focused&&focused.id==="sheetQueue";
 
   sheet.innerHTML=
     '<div class="sheet-head"><div class="t">'+
@@ -1869,6 +1946,11 @@ function renderSheet(){
     };
     const off=sheet.querySelector("#sheetSpeedOff");
     if(off) off.onclick=()=>setDownloadSpeedLimit(d,0);
+  }
+  const queueSel=sheet.querySelector("#sheetQueue");
+  if(queueSel){
+    if(queueFocused) queueSel.focus();
+    queueSel.onchange=()=>moveToQueue(d,queueSel.value);
   }
 }
 
@@ -2356,6 +2438,8 @@ function addDialog(prefillUrl){
       '<div class="field"><label class="label" for="addChecksum">Checksum <span style="color:var(--muted-foreground);font-weight:400">(optional)</span></label>'+
         '<input class="input mono" id="addChecksum" placeholder="MD5, SHA-1 or SHA-256 from the download page" autocomplete="off" spellcheck="false">'+
         '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">The finished file is checked against it. Without one, FlowDownload still checks the server\'s Digest header or a published .sha256 file when there is one.</p></div>'+
+      (queuesCache.length?'<div class="field"><label class="label" for="addQueue">Queue</label>'+
+        '<select class="input" id="addQueue" style="width:auto">'+queueOptions("")+'</select></div>':'')+
     '</div>'+
     '<div class="dialog-foot"><button class="btn btn-outline" data-close>Cancel</button>'+
       '<button class="btn btn-primary" id="addGo">Add download</button></div></div>');
@@ -2403,7 +2487,8 @@ function addDialog(prefillUrl){
       // always the current default (changed via Browse above, which
       // already saved it to settings), never sent as a path from here.
       const checksum=dlg.querySelector("#addChecksum").value.trim();
-      const task=await post("/api/downloads", {url, filename: name, checksum});
+      const queueSel=dlg.querySelector("#addQueue");
+      const task=await post("/api/downloads", {url, filename: name, checksum, queue_id: queueSel?queueSel.value:""});
       upsert(task); closeOverlay(); render();
       if(task.status==="completed") toast("info","Already downloaded",task.filename+" — kept the existing file");
       else toast("ok","Added",task.filename);
@@ -2507,6 +2592,9 @@ function settingsPanes(){
       '</select>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Applies when the same URL was already completed — from the extension or the Add download dialog.</p>'+
       '</div>',
+    Queues: '<p style="margin:10px 0;font-size:11.5px;color:var(--muted-foreground);line-height:1.5">Every download goes to Main unless you pick another queue when you add it, or in its details. Downloads from Chrome go to Main. Downloads at once (Downloads tab) still caps the total across all queues. At a queue\'s stop time its downloads stop and wait, then carry on at its next start.</p>'+
+      '<div id="queueRows" style="display:flex;flex-direction:column;gap:8px">'+queuesCache.map(queueRow).join("")+'</div>'+
+      '<div style="margin-top:8px"><button class="btn btn-outline btn-sm" id="queueAdd">Add queue</button></div>',
     Chrome: '<div class="setrow" style="padding-top:12px"><div class="txt"><div>Native messaging host</div>'+
       '<p>'+(chromeCache&&chromeCache.host_registered?"Registered — Chrome can hand downloads to FlowDownload.":"Not registered. Restart FlowDownload (from a source checkout, run scripts/setup_chrome_integration.py), then reload the extension.")+'</p></div>'+
       '<span class="badge badge-'+(chromeCache&&chromeCache.host_registered?"completed":"failed")+'">'+(chromeCache&&chromeCache.host_registered?"Registered":"Missing")+'</span></div>'+
@@ -2563,7 +2651,8 @@ async function settingsDialog(initialTab = "General"){
   try{ settingsCache=await getJSON("/api/settings"); }
   catch(err){ toast("err","Couldn't load settings",err.message); }
   try{ chromeCache=await getJSON("/api/chrome-status"); }catch(_){}
-  const tabs=["General","Downloads","Chrome","Advanced","About"];
+  try{ queuesCache=await getJSON("/api/queues"); }catch(_){}
+  const tabs=["General","Downloads","Queues","Chrome","Advanced","About"];
   const startTab = tabs.includes(initialTab) ? initialTab : "General";
   const panes=settingsPanes();
 
@@ -2629,6 +2718,29 @@ async function settingsDialog(initialTab = "General"){
           toast("ok","Saved — "+settingsCache.categories.length+" categor"+(settingsCache.categories.length===1?"y":"ies"));
         }catch(err){ toast("err","Couldn't save categories",err.message); }
       };
+    }
+    const queueBox=dlg.querySelector("#queueRows");
+    if(queueBox){
+      dlg.querySelector("#queueAdd").onclick=()=>{
+        queueBox.insertAdjacentHTML("beforeend",queueRow({id:"",name:"",max_concurrent:1,scheduled:false,
+          start_minute:22*60,stop_minute:6*60,days:[0,1,2,3,4,5,6]}));
+        queueBox.lastElementChild.querySelector("input").focus();
+      };
+      queueBox.addEventListener("click",async e=>{
+        const row=e.target.closest(".queue-row");
+        if(!row) return;
+        const id=row.dataset.queue;
+        if(e.target.closest("[data-q-discard]")){ row.remove(); return; }
+        if(e.target.closest("[data-q-delete]")){
+          try{ await del("/api/queues/"+encodeURIComponent(id)); await reloadQueues(); refreshTab(); toast("ok","Queue deleted","Its downloads moved to Main"); }
+          catch(err){ toast("err","Couldn't delete the queue",err.message); }
+        }else if(e.target.closest("[data-q-save]")){
+          try{
+            const q=id?await patch("/api/queues/"+encodeURIComponent(id),readQueueRow(row)):await post("/api/queues",readQueueRow(row));
+            await reloadQueues(); refreshTab(); toast("ok","Saved",q.name);
+          }catch(err){ toast("err","Couldn't save the queue",err.message); }
+        }
+      });
     }
     const siteInput=dlg.querySelector("#setSiteConns"), siteSave=dlg.querySelector("#setSiteConnsSave");
     if(siteInput && siteSave){
@@ -2983,6 +3095,7 @@ function connectWS(){
     if(reconnect){
       try{
         downloads=(await getJSON("/api/downloads")).map(normalize);
+        queuesCache=await getJSON("/api/queues");
         const ids=new Set(downloads.map(d=>d.id));
         ui.selected=new Set([...ui.selected].filter(id=>ids.has(id)));
         if(ui.activeId && !ids.has(ui.activeId)) ui.activeId=null;
@@ -2993,6 +3106,7 @@ function connectWS(){
   ws.onmessage=e=>{
     const msg=JSON.parse(e.data);
     if(msg.type==="added"){ upsert(msg.download); render(); }
+    else if(msg.type==="queues") reloadQueues();
     else if(msg.type==="updated"){
       const n=normalize(msg.download);
       const i=downloads.findIndex(x=>x.id===n.id);
@@ -3059,10 +3173,12 @@ function connectWS(){
 
 async function boot(){
   try{
-    const [tasks, settings, disk, chrome] = await Promise.all([
+    const [tasks, settings, disk, chrome, queues] = await Promise.all([
       getJSON("/api/downloads"), getJSON("/api/settings"), getJSON("/api/disk"), getJSON("/api/chrome-status"),
+      getJSON("/api/queues"),
     ]);
     downloads = tasks.map(normalize);
+    queuesCache = queues;
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
     applyTheme(settingsCache.theme);
     renderSpeedLimitBtn();

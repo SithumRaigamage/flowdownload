@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.engine.models import DownloadTask
 from app.engine.paths import validate_categories
+from app.engine.queues import ALL_DAYS, MAX_NAME_LENGTH, MAX_QUEUE_SLOTS, MINUTES_PER_DAY, Queue
 from app.engine.settings import Settings
 
 # Bounds for the speed limit, matched by the UI's field (SPEED_MIN_KB/SPEED_MAX_KB in index.html).
@@ -35,6 +37,7 @@ class DownloadOut(BaseModel):
     checksum_status: Literal["", "verified", "mismatch"]
     checksum_source: str
     speed_limit_bps: int
+    queue_id: str
     referrer: str
     connections: int
     # [[start, done, end], ...] byte ranges of a split download, for the UI's
@@ -69,6 +72,7 @@ class DownloadOut(BaseModel):
             checksum_status=task.checksum_status if task.checksum_status in ("verified", "mismatch") else "",
             checksum_source=task.checksum_source,
             speed_limit_bps=task.speed_limit_bps,
+            queue_id=task.queue_id,
             referrer=task.referrer,
             connections=task.connections,
             segments=task.segments,
@@ -109,6 +113,8 @@ class NewDownloadRequest(BaseModel):
     # Optional MD5/SHA-1/SHA-256 to check the finished file against;
     # checksum.parse_expected validates it (a bad one is a 400).
     checksum: str = Field(default="", max_length=200)
+    # A named queue's id; "" = Main. An unknown one is a 400.
+    queue_id: str = Field(default="", max_length=64)
 
 
 class ProbeResponse(BaseModel):
@@ -200,14 +206,55 @@ class SettingsPatch(BaseModel):
 
 class DownloadPatch(BaseModel):
     # This download's own cap; 0 removes it. Same bounds as the app-wide one.
-    speed_limit_bps: int = Field(ge=0, le=MAX_SPEED_LIMIT_BPS)
+    speed_limit_bps: int | None = Field(default=None, ge=0, le=MAX_SPEED_LIMIT_BPS)
+    # Move it to this queue ("" = Main).
+    queue_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("speed_limit_bps")
     @classmethod
-    def _zero_or_at_least_minimum(cls, value: int) -> int:
-        if 0 < value < MIN_SPEED_LIMIT_BPS:
+    def _zero_or_at_least_minimum(cls, value: int | None) -> int | None:
+        if value is not None and 0 < value < MIN_SPEED_LIMIT_BPS:
             raise ValueError(f"Speed limit must be at least {MIN_SPEED_LIMIT_BPS // 1024} KB/s")
         return value
+
+
+class QueueOut(BaseModel):
+    id: str
+    name: str
+    max_concurrent: int
+    scheduled: bool
+    start_minute: int
+    stop_minute: int
+    days: list[int]
+    is_open: bool
+    # Epoch seconds of the next opening while closed (for "starts at 02:00"); None while open.
+    opens_at: float | None
+
+    @classmethod
+    def from_queue(cls, queue: Queue, is_open: bool, opens_at: datetime | None) -> QueueOut:
+        return cls(id=queue.id, name=queue.name, max_concurrent=queue.max_concurrent,
+                   scheduled=queue.scheduled, start_minute=queue.start_minute, stop_minute=queue.stop_minute,
+                   days=list(queue.days), is_open=is_open,
+                   opens_at=opens_at.timestamp() if opens_at is not None else None)
+
+
+class QueueIn(BaseModel):
+    # Field bounds only; queues.validate_queue also checks names and windows.
+    name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
+    max_concurrent: int = Field(default=1, ge=1, le=MAX_QUEUE_SLOTS)
+    scheduled: bool = False
+    start_minute: int = Field(default=0, ge=0, lt=MINUTES_PER_DAY)
+    stop_minute: int = Field(default=0, ge=0, lt=MINUTES_PER_DAY)
+    days: list[int] = Field(default_factory=lambda: list(ALL_DAYS), max_length=7)
+
+
+class QueuePatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME_LENGTH)
+    max_concurrent: int | None = Field(default=None, ge=1, le=MAX_QUEUE_SLOTS)
+    scheduled: bool | None = None
+    start_minute: int | None = Field(default=None, ge=0, lt=MINUTES_PER_DAY)
+    stop_minute: int | None = Field(default=None, ge=0, lt=MINUTES_PER_DAY)
+    days: list[int] | None = Field(default=None, max_length=7)
 
 
 class RefreshUrlRequest(BaseModel):

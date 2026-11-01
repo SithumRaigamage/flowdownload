@@ -53,7 +53,7 @@ downloads, supported protocols, and distribution.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Multi-connection with dynamic splitting | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Speed limiter | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Multiple queues + scheduler | ✅ | ✅ | – | ✅ | ✅ | ✅ (Persepolis) | ❌ one global queue |
+| Multiple queues + scheduler | ✅ | ✅ | – | ✅ | ✅ | ✅ (Persepolis) | ✅ |
 | Categories → folders | ✅ | ✅ | – | ✅ | ✅ | – | 🟡 by file type only |
 | Video / stream grabber (HLS, DASH) | ✅ | ✅ HLS | via extensions | ✅ | ✅ | – | ❌ |
 | Clipboard monitoring | ✅ | – | – | ✅ | ✅ | – | ❌ |
@@ -85,25 +85,21 @@ Settings → Downloads. Each download can also have its own cap
 connections, taken from before the global one (`DownloadWorker.throttle`).
 
 **Left:**
-- Speed schedules, e.g. limit during working hours. This builds on 1.2.
+- Speed schedules, e.g. limit during working hours. This can reuse the
+  queue windows from 1.2 (`queues.is_open`).
 
-### 1.2 Multiple queues and a scheduler — M
-Today there's one global queue, managed by "Downloads at once" in
-`DownloadManager._dispatch_queue` (`app/engine/manager.py`).
-
-- Named queues, each with:
-  - its own "downloads at once"
-  - start and stop times, and the weekdays it runs
-  - an action when it's finished: notify, sleep, shut down, or quit the app
-- Storage: add a `queue_id` column to `downloads`, plus a `queues` table, as a
-  migration in `Storage._migrate` (`app/engine/storage.py`).
-- Manager: `_dispatch_queue` fills each queue up to its own limit, still within
-  the per-site connection budget. A timer (the 1 s poll that already exists)
-  starts and stops queues on their schedule.
-- Waiting rows already show why they're waiting. Add the reason
-  "queue paused until 02:00", alongside "site busy".
-- Shutdown/sleep is platform-specific. Put it in `app/platform_util.py` and
-  always show a cancellable countdown first.
+### 1.2 Multiple queues and a scheduler — built
+Named queues (`app/engine/queues.py`, a `queues` table plus a `queue_id`
+column on `downloads`) each have their own "downloads at once" and an optional
+daily window: start and stop times and weekdays, overnight windows included.
+The built-in Main queue (`queue_id` ''), where Chrome's downloads land, has no
+schedule. "Downloads at once" still caps the total. `_dispatch_queue` fills
+each queue up to its own limit; the 2 s poll (`_apply_schedules`) puts running
+downloads back to waiting when their window closes, and they start again when
+it opens. A queue whose last download finishes raises a notification (no
+sleep or shutdown, by choice). Waiting rows say "Queue Night starts at 22:00"
+or "Waiting for a free slot in Night". Managed in Settings → Queues; the Add
+sheet and the detail sheet pick a download's queue.
 
 ### 1.3 Real categories — built
 `Settings.categories` is an editable list of `{name, extensions, folder}`

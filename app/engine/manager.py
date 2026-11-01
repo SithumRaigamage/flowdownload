@@ -4,17 +4,20 @@ import http.cookiejar
 import math
 import os
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import datetime
 
 import requests
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from app.engine import checksum, segmented
+from app.engine import checksum, queues, segmented
 from app.engine.downloader import DownloadWorker
 from app.engine.models import DownloadStatus, DownloadTask
 from app.engine.paths import domain_key, safe_filename
 from app.engine.probe import validate_download_url
 from app.engine.queueing import find_completed, queue_download
+from app.engine.queues import MAIN_QUEUE_ID, Queue
 from app.engine.settings import Settings
 from app.engine.storage import Storage
 from app.engine.throttle import RateLimiter
@@ -58,12 +61,22 @@ class DownloadManager(QObject):
     task_removed = Signal(str)
     task_finished = Signal(str, str)  # task_id, status_value ("completed" or "failed")
     settings_changed = Signal()
+    # A queue was added, edited or deleted, or its schedule opened or closed it.
+    queues_changed = Signal()
+    queue_finished = Signal(str)  # queue name: its last unfinished download completed or failed
 
-    def __init__(self, storage: Storage, settings: Settings, parent=None):
+    def __init__(self, storage: Storage, settings: Settings, parent=None,
+                 clock: Callable[[], datetime] = datetime.now):
         super().__init__(parent)
         self.storage = storage
         self.settings = settings
+        # Local wall-clock time for queue schedules; tests pass their own.
+        self._clock = clock
         self.tasks: dict[str, DownloadTask] = {}
+        self.queues: dict[str, Queue] = {q.id: q for q in storage.load_queues()}
+        # Named queues whose schedule had them open at the last check. Starting
+        # inside a window isn't an "opening", so nothing is stopped or announced.
+        self._open_queues = self._queues_open_now()
         self._workers: dict[str, DownloadWorker] = {}
         # Tasks the user resumed while their previous worker was still
         # unwinding from a pause. They're held QUEUED (the worker's final
@@ -115,6 +128,98 @@ class DownloadManager(QObject):
             self.tasks[task.id] = task
             self.task_added.emit(task.id)
         self._apply_pending_refreshes()
+        self._apply_schedules()
+        self._dispatch_queue()
+
+    def _queues_open_now(self) -> set[str]:
+        now = self._clock()
+        return {q.id for q in self.queues.values() if queues.is_open(q, now)}
+
+    def _apply_schedules(self) -> None:
+        """Act on queues whose window opened or closed since the last check.
+
+        Downloads running in a queue that just closed go back to waiting (not
+        paused), so they carry on by themselves when the window next opens.
+        """
+        open_now = self._queues_open_now()
+        if open_now == self._open_queues:
+            return
+        closed = self._open_queues - open_now
+        self._open_queues = open_now
+        for task in list(self.tasks.values()):
+            if task.queue_id in closed and task.status in ACTIVE_STATUSES:
+                self._requeue(task.id, f"Stopped: queue {self.queues[task.queue_id].name} is outside its hours")
+        self.queues_changed.emit()
+
+    def _requeue(self, task_id: str, message: str) -> None:
+        """Stop a running download and put it back in its queue."""
+        task = self.tasks[task_id]
+        worker = self._workers.get(task_id)
+        if worker is not None:
+            worker.pause()
+            # Its final PAUSED signal becomes QUEUED (see _do_status_changed).
+            self._resume_pending.add(task_id)
+        task.status = DownloadStatus.QUEUED
+        task.error_message = ""
+        task.speed_bps = 0.0
+        task.updated_at = time.time()
+        self.storage.save(task)
+        self._log(task_id, "info", message)
+        self.task_updated.emit(task_id)
+
+    def queue_opens_at(self, queue_id: str) -> datetime | None:
+        """When a closed named queue next opens; None while it's open."""
+        if queue_id in self._open_queues:
+            return None
+        return queues.opens_at(self.queues[queue_id], self._clock())
+
+    def is_queue_open(self, queue_id: str) -> bool:
+        return queue_id in self._open_queues
+
+    def add_queue(self, queue: Queue) -> Queue:
+        """Validate and save a new named queue (ValueError on bad input)."""
+        queue = queues.validate_queue(queue, (q.name for q in self.queues.values()))
+        self.storage.save_queue(queue)
+        self.queues[queue.id] = queue
+        self._queues_edited()
+        return queue
+
+    def update_queue(self, queue_id: str, **changes) -> Queue:
+        """Change a named queue's fields (KeyError if unknown, ValueError if invalid)."""
+        current = self.queues[queue_id]
+        others = (q.name for q in self.queues.values() if q.id != queue_id)
+        queue = queues.validate_queue(replace(current, **changes), others)
+        self.storage.save_queue(queue)
+        self.queues[queue_id] = queue
+        self._queues_edited()
+        return queue
+
+    def delete_queue(self, queue_id: str) -> None:
+        """Delete a named queue. Its downloads move to Main, and running ones keep going."""
+        del self.queues[queue_id]
+        self.storage.delete_queue(queue_id)
+        for task in self.tasks.values():
+            if task.queue_id == queue_id:
+                task.queue_id = MAIN_QUEUE_ID
+                self.task_updated.emit(task.id)
+        self._queues_edited()
+
+    def _queues_edited(self) -> None:
+        # A schedule edited to "closed right now" stops that queue's downloads,
+        # the same as reaching the stop time.
+        self._apply_schedules()
+        self.queues_changed.emit()
+        self._dispatch_queue()
+
+    def set_queue(self, task_id: str, queue_id: str) -> None:
+        """Move a download to another queue. A running one keeps running."""
+        if queue_id != MAIN_QUEUE_ID and queue_id not in self.queues:
+            raise ValueError("That queue no longer exists")
+        task = self.tasks[task_id]
+        task.queue_id = queue_id
+        task.updated_at = time.time()
+        self.storage.save(task)
+        self.task_updated.emit(task_id)
         self._dispatch_queue()
 
     def _apply_pending_refreshes(self) -> None:
@@ -190,9 +295,12 @@ class DownloadManager(QObject):
     def get_history(self, task_id: str) -> list[dict]:
         return list(self.history.get(task_id, []))
 
-    def add_download(self, url: str, filename: str, expected_checksum: str = "") -> str:
+    def add_download(self, url: str, filename: str, expected_checksum: str = "",
+                     queue_id: str = MAIN_QUEUE_ID) -> str:
         validate_download_url(url)
         expected_checksum = checksum.parse_expected(expected_checksum)  # ValueError -> 400
+        if queue_id != MAIN_QUEUE_ID and queue_id not in self.queues:
+            raise ValueError("That queue no longer exists")
 
         # Only the filename is trusted from the caller -- the destination
         # directory is always settings.download_dir, never client-supplied,
@@ -217,8 +325,9 @@ class DownloadManager(QObject):
             # already picks a fresh filename on any collision.
 
         task = queue_download(self.storage, self.settings, url, filename, replace=replace)
-        if expected_checksum:
+        if expected_checksum or queue_id:
             task.expected_checksum = expected_checksum
+            task.queue_id = queue_id
             self.storage.save(task)
         self.tasks[task.id] = task
         self._log(task.id, "info", "Added to queue")
@@ -241,9 +350,11 @@ class DownloadManager(QObject):
             self.storage.save(task)
             self.task_updated.emit(task_id)
             return
-        # Only "Downloads at once" queues a task. The per-site limit just
-        # shrinks the connections _spawn grants (down to 1), never blocks.
-        if self._active_count() >= self.settings.max_concurrent_downloads:
+        # Only "Downloads at once" and the task's queue (its limit and hours)
+        # hold a task back. The per-site limit just shrinks the connections
+        # _spawn grants (down to 1), never blocks.
+        if (self._active_count() >= self.settings.max_concurrent_downloads
+                or self._queue_room(task.queue_id) <= 0):
             task.status = DownloadStatus.QUEUED
             task.error_message = ""
             task.updated_at = time.time()
@@ -424,6 +535,16 @@ class DownloadManager(QObject):
     def _active_count(self) -> int:
         return sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES)
 
+    def _queue_room(self, queue_id: str) -> float:
+        """Downloads this queue may still start: none while it's outside its hours."""
+        queue = self.queues.get(queue_id)
+        if queue is None:
+            return math.inf  # Main (or a queue deleted under it): only "Downloads at once" applies
+        if queue_id not in self._open_queues:
+            return 0
+        running = sum(1 for t in self.tasks.values() if t.status in ACTIVE_STATUSES and t.queue_id == queue_id)
+        return queue.max_concurrent - running
+
     def _site_limit(self) -> float:
         """Per-site connection budget, or infinity when the limit is off (0)."""
         limit = int(self.settings.site_connection_limit)
@@ -448,15 +569,21 @@ class DownloadManager(QObject):
              if t.status == DownloadStatus.QUEUED),
             key=lambda t: t.created_at,
         )
+        room: dict[str, float] = {}
         for task in candidates:
             if free_slots <= 0:
                 break
             if task.id in self._workers:
                 continue  # previous worker still unwinding; never run two on one .part
+            if task.queue_id not in room:
+                room[task.queue_id] = self._queue_room(task.queue_id)
+            if room[task.queue_id] <= 0:
+                continue  # its queue is full or outside its hours; later ones may be in another queue
             # No per-site check here: a site whose connection budget is used
             # up still starts the task, on a single connection (see _spawn).
             self._spawn(task.id)
             free_slots -= 1
+            room[task.queue_id] -= 1
 
     def _spawn(self, task_id: str) -> None:
         task = self.tasks[task_id]
@@ -614,6 +741,20 @@ class DownloadManager(QObject):
         self.task_updated.emit(task_id)
         if task.status in (DownloadStatus.COMPLETED, DownloadStatus.FAILED):
             self.task_finished.emit(task_id, status_value)
+            self._announce_if_queue_finished(task.queue_id)
+
+    def _announce_if_queue_finished(self, queue_id: str) -> None:
+        """Emit queue_finished when a named queue has nothing left to do.
+
+        Paused downloads still count as unfinished. Main isn't announced:
+        each of its downloads already gets its own notification.
+        """
+        queue = self.queues.get(queue_id)
+        if queue is None:
+            return
+        done = (DownloadStatus.COMPLETED, DownloadStatus.FAILED, DownloadStatus.CANCELLED)
+        if all(t.status in done for t in self.tasks.values() if t.queue_id == queue_id):
+            self.queue_finished.emit(queue.name)
 
     def _on_digest_computed(self, task_id: str, digest_sha256: str, verified: bool | None, source: str) -> None:
         """Persist the worker-computed SHA-256 and the integrity check result.

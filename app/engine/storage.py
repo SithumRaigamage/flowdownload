@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from app.engine.models import DownloadTask
+from app.engine.queues import Queue, days_to_mask, mask_to_days
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS downloads (
@@ -74,7 +75,8 @@ class Storage:
                                   ("expected_checksum", "TEXT DEFAULT ''"),
                                   ("checksum_status", "TEXT DEFAULT ''"),
                                   ("checksum_source", "TEXT DEFAULT ''"),
-                                  ("speed_limit_bps", "INTEGER DEFAULT 0")):
+                                  ("speed_limit_bps", "INTEGER DEFAULT 0"),
+                                  ("queue_id", "TEXT DEFAULT ''")):
             if column not in existing_columns:
                 self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} {ddl_type}")
         # Two processes (this app and the Chrome native host, launched fresh
@@ -93,6 +95,14 @@ class Storage:
             "CREATE TABLE IF NOT EXISTS pending_refresh ("
             "task_id TEXT NOT NULL, url TEXT NOT NULL, cookie TEXT DEFAULT '', "
             "referrer TEXT DEFAULT '', created_at REAL)"
+        )
+        # Named queues (app/engine/queues.py). "Main" is implicit: a download
+        # whose queue_id is '' or names no row here belongs to it.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS queues ("
+            "id TEXT PRIMARY KEY, name TEXT NOT NULL, max_concurrent INTEGER DEFAULT 1, "
+            "scheduled INTEGER DEFAULT 0, start_minute INTEGER DEFAULT 0, stop_minute INTEGER DEFAULT 0, "
+            "days INTEGER DEFAULT 127, created_at REAL)"
         )
         try:
             self._conn.execute(
@@ -114,8 +124,8 @@ class Storage:
                      status, error_message, etag, last_modified, cookie_header,
                      digest_sha256, digest_verified, referrer, accept_ranges,
                      expected_checksum, checksum_status, checksum_source, speed_limit_bps,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     queue_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     url=excluded.url,
                     dest_path=excluded.dest_path,
@@ -135,6 +145,7 @@ class Storage:
                     checksum_status=excluded.checksum_status,
                     checksum_source=excluded.checksum_source,
                     speed_limit_bps=excluded.speed_limit_bps,
+                    queue_id=excluded.queue_id,
                     updated_at=excluded.updated_at
                 """,
                 task.to_row(),
@@ -160,6 +171,33 @@ class Storage:
                 self._conn.commit()
         return [row[1:] for row in rows]
 
+    def load_queues(self) -> list[Queue]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, name, max_concurrent, scheduled, start_minute, stop_minute, days, created_at "
+                "FROM queues ORDER BY created_at"
+            ).fetchall()
+        return [Queue(id=r[0], name=r[1], max_concurrent=r[2], scheduled=bool(r[3]), start_minute=r[4],
+                      stop_minute=r[5], days=mask_to_days(r[6]), created_at=r[7]) for r in rows]
+
+    def save_queue(self, queue: Queue) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO queues "
+                "(id, name, max_concurrent, scheduled, start_minute, stop_minute, days, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (queue.id, queue.name, queue.max_concurrent, queue.scheduled, queue.start_minute,
+                 queue.stop_minute, days_to_mask(queue.days), queue.created_at),
+            )
+            self._conn.commit()
+
+    def delete_queue(self, queue_id: str) -> None:
+        """Delete a named queue; its downloads move to Main."""
+        with self._lock:
+            self._conn.execute("UPDATE downloads SET queue_id = '' WHERE queue_id = ?", (queue_id,))
+            self._conn.execute("DELETE FROM queues WHERE id = ?", (queue_id,))
+            self._conn.commit()
+
     def delete(self, task_id: str) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM downloads WHERE id = ?", (task_id,))
@@ -169,7 +207,8 @@ class Storage:
         "id, url, dest_path, filename, total_bytes, downloaded_bytes, "
         "status, error_message, etag, last_modified, cookie_header, "
         "digest_sha256, digest_verified, referrer, accept_ranges, "
-        "expected_checksum, checksum_status, checksum_source, speed_limit_bps, created_at, updated_at"
+        "expected_checksum, checksum_status, checksum_source, speed_limit_bps, queue_id, "
+        "created_at, updated_at"
     )
 
     def load_all(self) -> list[DownloadTask]:

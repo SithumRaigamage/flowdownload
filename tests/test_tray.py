@@ -28,3 +28,15 @@ def test_new_download_never_surfaces_the_window(make_manager, qapp):
     manager.task_added.emit("t2")
     assert not window.isVisible() and window.activations == 0
     tray.icon.hide()
+
+
+def test_a_finished_queue_is_announced_unless_notifications_are_off(make_manager, qapp, monkeypatch):
+    manager = make_manager()
+    tray = TrayController(_Window(), manager)
+    shown = []
+    monkeypatch.setattr(tray.icon, "showMessage", lambda title, text, *_: shown.append((title, text)))
+    manager.queue_finished.emit("Night")
+    manager.settings.notifications_enabled = False
+    manager.queue_finished.emit("Night")
+    assert shown == [("Queue finished", "Every download in Night is done.")]
+    tray.icon.hide()

@@ -55,6 +55,7 @@ class ApiServer:
         manager.task_added.connect(self._on_task_added)
         manager.task_updated.connect(self._on_task_changed)
         manager.task_removed.connect(self._on_task_removed)
+        manager.queues_changed.connect(self._on_queues_changed)
 
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
 
@@ -106,6 +107,15 @@ class ApiServer:
         except Exception:
             import traceback
             print("FlowDownload: _on_task_changed swallowed exception:", traceback.format_exc(), flush=True)
+
+    def _on_queues_changed(self) -> None:
+        # Just a nudge: the UI re-reads /api/queues (it computes "opens at"
+        # from the queues' fields, which this would otherwise duplicate).
+        try:
+            self.broadcaster.publish({"type": "queues"})
+        except Exception:
+            import traceback
+            print("FlowDownload: _on_queues_changed swallowed exception:", traceback.format_exc(), flush=True)
 
     def _on_task_removed(self, task_id: str) -> None:
         try:

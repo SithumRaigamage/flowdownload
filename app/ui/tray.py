@@ -58,6 +58,7 @@ class TrayController:
         self.icon.show()
 
         self.manager.task_finished.connect(self._on_task_finished)
+        self.manager.queue_finished.connect(self._on_queue_finished)
         # New downloads deliberately don't surface the window: re-opening it
         # on every Chrome hand-off undid closing it to the tray.
 
@@ -71,6 +72,13 @@ class TrayController:
         self.window.activateWindow()
         from app.ui.macos_window import activate_macos_app
         activate_macos_app(self.window)
+
+    def _on_queue_finished(self, name: str) -> None:
+        if self.manager.settings.notifications_enabled:
+            self.icon.showMessage(
+                "Queue finished", f"Every download in {name} is done.",
+                QSystemTrayIcon.MessageIcon.Information, 5000,
+            )
 
     def _on_task_finished(self, task_id: str, status_value: str) -> None:
         if not self.manager.settings.notifications_enabled:

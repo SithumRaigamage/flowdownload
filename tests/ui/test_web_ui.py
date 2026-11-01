@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime
 
 import pytest
 from PySide6.QtCore import QUrl
@@ -12,6 +13,7 @@ from PySide6.QtWebEngineCore import QWebEnginePage
 
 from app.api.runner import ApiServer
 from app.engine.models import DownloadStatus as S
+from app.engine.queues import Queue
 from app.version import APP_VERSION
 
 pytestmark = pytest.mark.ui
@@ -113,6 +115,36 @@ def test_queued_row_explains_why(ui, server):
     queued = mgr.tasks[mgr.add_download(f"{server}/b?{SLOW}", "b.bin")]
     assert queued.status == S.QUEUED
     assert page.wait_js(page.row(queued.id, ".rbot") + "?.textContent.includes('Waiting for a free slot')")
+
+
+def test_queued_row_says_when_its_closed_queue_starts(ui, server):
+    mgr, page = ui(clock=lambda: datetime(2026, 11, 2, 21, 0))  # a Monday evening
+    # Added after the page loaded: the "queues" event makes the page re-read them.
+    queue = mgr.add_queue(Queue(name="Night", scheduled=True, start_minute=22 * 60, stop_minute=6 * 60, days=(0,)))
+    task = mgr.tasks[mgr.add_download(f"{server}/n", "n.bin", queue_id=queue.id)]
+    assert task.status == S.QUEUED
+    assert page.wait_js(page.row(task.id, ".rbot") + "?.textContent.includes('Queue Night starts')")
+
+
+def test_queues_tab_creates_a_queue_and_the_detail_sheet_moves_a_download(ui, server, wait):
+    mgr, page = ui()
+    task = mgr.tasks[mgr.add_download(f"{server}/q.bin?{SLOW}", "q.bin")]
+    mgr.pause(task.id)
+    assert wait(lambda: task.status == S.PAUSED)
+    page.js("settingsDialog('Queues')")
+    assert page.wait_js("!!document.getElementById('queueAdd')")
+    page.js("document.getElementById('queueAdd').click()")
+    page.js("document.querySelector('.queue-row [data-q=\"name\"]').value = 'Night'")
+    page.js("document.querySelector('.queue-row [data-q-save]').click()")
+    assert wait(lambda: [q.name for q in mgr.queues.values()] == ["Night"])
+    (queue_id,) = mgr.queues
+    assert page.wait_js("document.querySelector('.queue-row').dataset.queue === " + json.dumps(queue_id))
+
+    page.js(f"(closeOverlay(), ui.activeId = '{task.id}', ui.tab = 'overview', renderSheet())")
+    assert page.wait_js("!!document.getElementById('sheetQueue')")
+    page.js(f"(() => {{ const s = document.getElementById('sheetQueue'); s.value = {json.dumps(queue_id)};"
+            " s.dispatchEvent(new Event('change')); })()")
+    assert wait(lambda: task.queue_id == queue_id)
 
 
 def test_retry_reason_survives_progress_updates(ui, server, wait):
