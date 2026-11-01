@@ -397,12 +397,6 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .kv dd{margin:0;word-break:break-all}
 .hr{height:1px;background:var(--border);margin:16px 0}
 .sect{font-size:12px;font-weight:600;color:var(--muted-foreground);margin-bottom:10px}
-.timeline{position:relative;height:26px;border-radius:8px;background:var(--muted);overflow:hidden;margin-bottom:7px}
-.timeline i{position:absolute;top:0;height:100%}
-.timeline i[data-t="ok"]{background:var(--foreground);opacity:.7}
-.timeline i[data-t="stall"]{background:var(--destructive);opacity:.6}
-.timeline i[data-t="wait"]{background:repeating-linear-gradient(45deg,var(--dot-idle) 0 4px,transparent 4px 8px)}
-.tl-legend{display:flex;gap:12px;font-size:11px;color:var(--muted-foreground)}
 .log{display:flex;flex-direction:column}
 .log-item{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px}
 .log-item:last-child{border-bottom:0}
@@ -1682,20 +1676,6 @@ function renderList(){
 }
 
 /* ---------- detail sheet ---------- */
-function buildTimeline(entries){
-  if(entries.length<2) return null;
-  const start=entries[0].time, end=entries[entries.length-1].time;
-  const total=Math.max(end-start,1);
-  let bars="";
-  for(let i=0;i<entries.length-1;i++){
-    const seg=entries[i];
-    const w=(entries[i+1].time-seg.time)/total*100;
-    const t = seg.level==="warn" ? "wait" : seg.level==="error" ? "stall" : "ok";
-    bars+='<i data-t="'+t+'" style="left:'+(entries.slice(0,i).reduce((a,e,j)=>a+(entries[j+1].time-e.time)/total*100,0))+'%;width:'+w+'%"></i>';
-  }
-  return bars;
-}
-
 function renderSheet(){
   const sheet=document.getElementById("sheet");
   const d=downloads.find(x=>x.id===ui.activeId);
