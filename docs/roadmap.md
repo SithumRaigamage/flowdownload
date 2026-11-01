@@ -74,21 +74,18 @@ Why first: these are the features IDM users notice are missing straight away.
 They only touch code we control (no browser or third-party changes), and they
 fit the current engine.
 
-### 1.1 Speed limiter — S–M
-Today `app/engine/downloader.py` streams as fast as the connection allows.
-There's no setting to cap one download's speed or the whole app's.
+### 1.1 Speed limiter — global cap built; per-download cap left — S
+**Built:** an app-wide cap (`speed_limit_enabled` + `speed_limit_bps` in
+`Settings`), enforced by one shared token bucket (`app/engine/throttle.py`)
+that every chunk loop draws from: `DownloadWorker._stream_to_file` and
+`_Run._fetch`. It has an on/off toggle in the dock, and the value lives in
+Settings → Downloads.
 
-- Add a global cap (`max_bandwidth_bps` in `Settings`, 0 = unlimited) and an
-  optional per-download cap on `DownloadTask`.
-- Enforce it with a **single shared token bucket**, guarded by a lock. Every
-  chunk loop takes bytes from it before writing:
-  `DownloadWorker._stream_to_file` (single-stream downloads) and
-  `_Run._fetch` in `app/engine/segmented.py` (split downloads).
-- Pitfall: a split download runs one thread per connection. If each thread
-  sleeps on its own, 4 connections use 4× the cap. The bucket must be shared.
-- UI: an on/off toggle in the dock (like IDM's "Speed Limiter") and the value
-  in Settings → Downloads.
-- Later: speed schedules, e.g. limit during working hours. This builds on 1.2.
+**Left:**
+- An optional per-download cap on `DownloadTask`: needs a DB column (a
+  migration in `Storage._migrate`), a field in the detail sheet, and a second
+  limiter per worker, consumed alongside the global one.
+- Speed schedules, e.g. limit during working hours. This builds on 1.2.
 
 ### 1.2 Multiple queues and a scheduler — M
 Today there's one global queue, managed by "Downloads at once" in

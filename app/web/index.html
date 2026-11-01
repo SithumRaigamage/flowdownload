@@ -418,6 +418,7 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
 .dock .btn{height:44px;border-radius:22px;padding:0 16px;font-size:13.5px}
 .dock .btn-icon{width:44px;padding:0}
 .dock .btn-primary{padding:0 20px;font-weight:600}
+.dock #speedLimitBtn[aria-pressed="true"]{background:var(--foreground);color:var(--background)}
 .dock-sep{width:1px;height:24px;background:var(--border);margin:0 4px;flex:none}
 .view-nav{display:flex;gap:2px}
 .view-btn{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 16px;border-radius:22px;font-size:13.5px;font-weight:500;white-space:nowrap}
@@ -637,6 +638,10 @@ select.input{cursor:pointer;appearance:none;padding-right:30px;
     <span class="dock-sep"></span>
     <button class="btn btn-ghost" id="startAllBtn" title="Start all paused, queued and failed downloads">Start all</button>
     <button class="btn btn-ghost" id="pauseAllBtn">Pause all</button>
+    <button class="btn btn-ghost" id="speedLimitBtn" aria-pressed="false">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/></svg>
+      <span id="speedLimitLabel">Speed limit</span>
+    </button>
     <button class="btn btn-ghost" id="removeAllBtn" style="display:none" title="Remove all completed downloads">Clear done</button>
     <span class="dock-sep"></span>
     <button class="btn btn-ghost btn-icon" id="helpBtn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
@@ -707,6 +712,8 @@ const LIBRARY_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg
 // Slot bounds: shared by the toolbar +/- buttons and the Settings dialog so
 // the cap never drifts between entry points.
 const SLOT_MIN=1, SLOT_MAX=50;
+// Same bounds as the API (MIN_SPEED_LIMIT_BPS/MAX_SPEED_LIMIT_BPS in schemas.py).
+const SPEED_MIN_KB=16, SPEED_MAX_KB=10*1024*1024;
 const VIDEO_EXTENSIONS=["mp4","mov","webm","mkv","avi","vid","m4v","mpg","mpeg"];
 const AUDIO_EXTENSIONS=["mp3","wav","aac","m4a","flac","ogg","opus","m4b"];
 
@@ -2091,6 +2098,25 @@ document.querySelectorAll("[data-libview]").forEach(b=>b.onclick=()=>{
   renderLibrary();
 });
 document.getElementById("sort").addEventListener("change",e=>{ui.sort=e.target.value;renderList()});
+// The dock toggle turns the app-wide cap on and off; its value lives in
+// Settings -> Downloads, so turning it off and on again keeps it.
+function renderSpeedLimitBtn(){
+  const btn=document.getElementById("speedLimitBtn");
+  if(!btn) return;
+  const on=!!settingsCache.speed_limit_enabled, cap=fmtSpeed(settingsCache.speed_limit_bps||0);
+  btn.setAttribute("aria-pressed", on);
+  document.getElementById("speedLimitLabel").textContent = on ? "Limit "+cap : "Speed limit";
+  btn.title = on ? "All downloads share a cap of "+cap+". Click to remove it."
+                 : "Click to cap all downloads at "+cap+" (change it in Settings → Downloads).";
+}
+document.getElementById("speedLimitBtn").addEventListener("click",async()=>{
+  const on=!settingsCache.speed_limit_enabled;
+  try{
+    settingsCache=await patch("/api/settings",{speed_limit_enabled:on});
+    renderSpeedLimitBtn();
+    toast("info", on ? "Speed limited to "+fmtSpeed(settingsCache.speed_limit_bps) : "Speed limit off");
+  }catch(err){ toast("err","Couldn't change the speed limit",err.message); }
+});
 document.getElementById("pauseAllBtn").addEventListener("click",async()=>{
   const running=downloads.filter(d=>d.state==="downloading"||d.state==="retrying");
   const paused=downloads.filter(d=>d.state==="paused");
@@ -2296,6 +2322,12 @@ function addDialog(prefillUrl){
   };
 }
 
+// 1 MB/s -> {value:1, unit:"MB"}; 512 KB/s -> {value:512, unit:"KB"}.
+function speedLimitParts(bps){
+  bps=bps||MB;
+  return bps>=MB && bps%MB===0 ? {value:bps/MB, unit:"MB"} : {value:Math.round(bps/KB), unit:"KB"};
+}
+
 function switchRow(t,p,key,on){
   return '<div class="setrow"><div class="txt"><div>'+t+'</div><p>'+p+'</p></div>'+
     '<span class="switch" role="switch" aria-checked="'+on+'" data-setting="'+key+'"></span></div>';
@@ -2332,6 +2364,17 @@ function settingsPanes(){
         '<button class="btn btn-primary btn-sm" id="setConnSave">Save</button>'+
       '</div>'+
       '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Large files (8 MB+) on servers that support it are split across this many connections. Each connection counts toward Connections per site when that limit is set. 1 turns splitting off.</p>'+
+      '</div>'+
+      switchRow("Limit download speed","One cap shared by every download and connection. Also on the dock.","speed_limit_enabled",settingsCache.speed_limit_enabled)+
+      '<div class="field"><label class="label" for="setSpeed">Speed limit</label>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+
+        '<input class="input mono" type="number" min="1" step="1" id="setSpeed" value="'+esc(speedLimitParts(settingsCache.speed_limit_bps).value)+'" style="flex:1;width:auto">'+
+        '<select class="input" id="setSpeedUnit" aria-label="Speed limit unit" style="width:auto">'+
+          ['KB','MB'].map(u=>'<option value="'+u+'"'+(speedLimitParts(settingsCache.speed_limit_bps).unit===u?' selected':'')+'>'+u+'/s</option>').join('')+
+        '</select>'+
+        '<button class="btn btn-primary btn-sm" id="setSpeedSave">Save</button>'+
+      '</div>'+
+      '<p style="font-size:11px;color:var(--muted-foreground);margin:6px 0 0">Applies right away, including to downloads already running. At least 16 KB/s: below that, some servers drop the connection.</p>'+
       '</div>'+
       switchRow("Organize by type","Route downloads into Video / Audio / Documents / Archives subfolders based on file extension.","auto_folder_by_type",settingsCache.auto_folder_by_type)+
       '<div class="field"><label class="label" for="setDupPolicy">When a link was already downloaded</label>'+
@@ -2436,6 +2479,18 @@ async function settingsDialog(initialTab = "General"){
         catch(err){ toast("err","Couldn't save setting",err.message); }
       };
     }
+    const speedInput=dlg.querySelector("#setSpeed"), speedUnit=dlg.querySelector("#setSpeedUnit"), speedSave=dlg.querySelector("#setSpeedSave");
+    if(speedInput && speedUnit && speedSave){
+      speedInput.addEventListener("keydown",e=>{ if(e.key==="Enter") speedSave.click(); });
+      speedSave.onclick=async()=>{
+        const kb=Math.round((+speedInput.value||0)*(speedUnit.value==="MB"?1024:1));
+        const bps=Math.max(SPEED_MIN_KB,Math.min(SPEED_MAX_KB,kb))*KB;
+        const parts=speedLimitParts(bps);
+        speedInput.value=parts.value; speedUnit.value=parts.unit;
+        try{ settingsCache=await patch("/api/settings",{speed_limit_bps:bps}); renderSpeedLimitBtn(); toast("ok","Saved — speed limit "+fmtSpeed(bps)); }
+        catch(err){ toast("err","Couldn't save setting",err.message); }
+      };
+    }
     const siteInput=dlg.querySelector("#setSiteConns"), siteSave=dlg.querySelector("#setSiteConnsSave");
     if(siteInput && siteSave){
       siteInput.addEventListener("keydown",e=>{ if(e.key==="Enter") siteSave.click(); });
@@ -2469,7 +2524,7 @@ async function settingsDialog(initialTab = "General"){
     };
     const resetBtn=dlg.querySelector("#setResetAll");
     if(resetBtn) resetBtn.onclick=async()=>{
-      try{ settingsCache=await post("/api/settings/reset"); refreshTab(); toast("ok","Settings reset to defaults"); render(); }
+      try{ settingsCache=await post("/api/settings/reset"); refreshTab(); renderSpeedLimitBtn(); toast("ok","Settings reset to defaults"); render(); }
       catch(err){ toast("err","Couldn't reset settings",err.message); }
     };
 
@@ -2536,7 +2591,7 @@ async function settingsDialog(initialTab = "General"){
     if(sw){
       const key=sw.dataset.setting, newVal=sw.getAttribute("aria-checked")!=="true";
       sw.setAttribute("aria-checked",newVal);
-      try{ settingsCache=await patch("/api/settings",{[key]:newVal}); }
+      try{ settingsCache=await patch("/api/settings",{[key]:newVal}); renderSpeedLimitBtn(); }
       catch(err){ sw.setAttribute("aria-checked",!newVal); toast("err","Couldn't save setting",err.message); }
     }
   });
@@ -2868,6 +2923,7 @@ async function boot(){
     downloads = tasks.map(normalize);
     settingsCache = settings; diskCache = disk; chromeCache = chrome;
     applyTheme(settingsCache.theme);
+    renderSpeedLimitBtn();
   }catch(err){ toast("err","Couldn't load downloads",err.message); }
   // Start in downloads view. render() below ensures the library count is
   // populated even when downloads were already completed before this session.
