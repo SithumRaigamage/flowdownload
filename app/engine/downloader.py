@@ -16,6 +16,7 @@ from app.engine import segmented
 from app.engine.models import DownloadStatus
 from app.engine.paths import link_expiry
 from app.engine.retry_policy import compute_retry_delay
+from app.engine.throttle import RateLimiter
 
 CHUNK_SIZE = 64 * 1024
 CONNECT_TIMEOUT = 10
@@ -99,7 +100,7 @@ class DownloadWorker(QThread):
 
     def __init__(self, task_id: str, url: str, dest_path: str, etag: str, last_modified: str,
                  cookie_header: str, session: requests.Session, referrer: str = "",
-                 max_connections: int = 1, parent=None):
+                 max_connections: int = 1, limiter: RateLimiter | None = None, parent=None):
         super().__init__(parent)
         # Deliberately plain values/instance attributes, not a reference to the
         # manager's shared DownloadTask: this thread mutates them freely as it
@@ -121,6 +122,8 @@ class DownloadWorker(QThread):
         # Connections the manager granted from the site's budget; more than
         # one lets segmented.run_segmented split the file.
         self.max_connections = max_connections
+        # The manager's app-wide speed cap; unlimited when none is given.
+        self.limiter = limiter or RateLimiter()
         self._session = session
         self._pause_event = threading.Event()
         self._cancel_event = threading.Event()
@@ -391,6 +394,8 @@ class DownloadWorker(QThread):
                     raise Paused()
                 if not chunk:
                     continue
+                if not self.limiter.consume(len(chunk), self._pause_event.is_set):
+                    raise Paused()  # paused or cancelled while held back by the speed limit
                 f.write(chunk)
                 downloaded += len(chunk)
                 downloaded_since_emit += len(chunk)

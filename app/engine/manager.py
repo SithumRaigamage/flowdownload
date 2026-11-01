@@ -17,6 +17,7 @@ from app.engine.probe import validate_download_url
 from app.engine.queueing import find_completed, queue_download
 from app.engine.settings import Settings
 from app.engine.storage import Storage
+from app.engine.throttle import RateLimiter
 
 ACTIVE_STATUSES = (DownloadStatus.DOWNLOADING, DownloadStatus.RETRYING)
 
@@ -77,6 +78,9 @@ class DownloadManager(QObject):
         # (not persisted), since it's a debugging aid, not state the app
         # needs to survive a restart.
         self.history: dict[str, list[dict]] = {}
+        # One bucket for the whole app, shared by every worker and every
+        # connection of a split download, so the cap is a true total.
+        self.limiter = RateLimiter(settings.speed_limit)
         self._session = requests.Session()
         # One session serves every download, so its cookie jar would carry
         # one task's server-set cookies into others on the same site. Each
@@ -354,6 +358,7 @@ class DownloadManager(QObject):
 
     def apply_settings(self, settings: Settings) -> None:
         self.settings = settings
+        self.limiter.set_rate(settings.speed_limit)  # running downloads too, not just new ones
         self._dispatch_queue()
         self.settings_changed.emit()
 
@@ -459,7 +464,7 @@ class DownloadManager(QObject):
         worker = DownloadWorker(
             task.id, task.url, task.dest_path, task.etag, task.last_modified,
             task.cookie_header, self._session, referrer=task.referrer,
-            max_connections=task.connections,
+            max_connections=task.connections, limiter=self.limiter,
         )
         worker.progress.connect(self._on_progress)
         worker.status_changed.connect(self._on_status_changed)

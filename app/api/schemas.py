@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field, field_validator
 from app.engine.models import DownloadTask
 from app.engine.settings import Settings
 
+# Bounds for the speed limit, matched by the UI's field (SPEED_MIN_KB/SPEED_MAX_KB in index.html).
+MIN_SPEED_LIMIT_BPS = 16 * 1024
+MAX_SPEED_LIMIT_BPS = 10 * 1024 ** 3
+
 
 class DownloadOut(BaseModel):
     id: str
@@ -115,6 +119,8 @@ class SettingsOut(BaseModel):
     duplicate_policy: Literal["rename", "skip", "overwrite"]
     connections_per_download: int
     site_connection_limit: int
+    speed_limit_enabled: bool
+    speed_limit_bps: int
     theme: Literal["system", "light", "dark"]
 
     @classmethod
@@ -128,6 +134,8 @@ class SettingsOut(BaseModel):
             duplicate_policy=settings.duplicate_policy,
             connections_per_download=settings.connections_per_download,
             site_connection_limit=settings.site_connection_limit,
+            speed_limit_enabled=settings.speed_limit_enabled,
+            speed_limit_bps=settings.speed_limit_bps,
             theme=settings.theme if settings.theme in ("system", "light", "dark") else "system",
         )
 
@@ -143,6 +151,10 @@ class SettingsPatch(BaseModel):
     duplicate_policy: Literal["rename", "skip", "overwrite"] | None = None
     connections_per_download: int | None = Field(default=None, ge=1, le=8)
     site_connection_limit: int | None = Field(default=None, ge=0, le=50)
+    speed_limit_enabled: bool | None = None
+    # Below about 16 KB/s a 64 KB chunk takes seconds to pass, long enough
+    # for some servers to drop the connection as idle.
+    speed_limit_bps: int | None = Field(default=None, ge=MIN_SPEED_LIMIT_BPS, le=MAX_SPEED_LIMIT_BPS)
     theme: Literal["system", "light", "dark"] | None = None
 
     @field_validator("download_dir")

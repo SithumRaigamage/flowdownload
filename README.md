@@ -94,6 +94,10 @@ that environment.
   the file is 8 MB or more and the server supports resumable ranges. Progress
   per piece is kept in a `<file>.part.segments` file next to the `.part`, so
   split downloads resume after a pause or restart too.
+- **An optional speed limit caps all downloads together** (the dock's
+  "Speed limit" button, value in Settings → Downloads, off by default). It's
+  one shared cap across every download and connection, and changing it
+  applies to downloads already running.
 - **"Downloads at once" decides how many files run.** An optional per-site
   cap (Settings → Downloads → "Connections per site", 0 = off by default;
   every `*.trafficdeposit.com` host counts as one site) can be set for CDNs
@@ -212,7 +216,7 @@ On Windows, uninstalling FlowDownload removes the registration.
 
 ## Roadmap
 
-Known gaps and possible future work (code signing, bandwidth throttling,
+Known gaps and possible future work (code signing, queues and scheduling,
 etc.) are
 tracked in [docs/roadmap.md](docs/roadmap.md).
 

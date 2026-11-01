@@ -33,10 +33,19 @@ class Settings:
     # stall under many parallel streams (trafficdeposit.com answered 503
     # above ~12). A split-file download uses several connections from it.
     site_connection_limit: int = 0
+    # App-wide speed cap, shared by every download and connection. Kept
+    # apart from the value so the dock's on/off toggle doesn't lose it.
+    speed_limit_enabled: bool = False
+    speed_limit_bps: int = 1024 * 1024
     # "system" follows macOS's light/dark appearance; "light"/"dark" pin it.
     # Kept here (not just in the page) so the native window and title bar
     # can match the page from the moment the app starts.
     theme: str = "system"
+
+    @property
+    def speed_limit(self) -> int:
+        """The cap in effect, in bytes per second (0 = unlimited)."""
+        return max(0, self.speed_limit_bps) if self.speed_limit_enabled else 0
 
     @classmethod
     def load(cls, path: str) -> Settings:

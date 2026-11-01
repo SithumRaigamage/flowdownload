@@ -418,6 +418,10 @@ class _Run:
                             return False
                         if not chunk:
                             continue
+                        # Before reserving: bytes held back by the speed limit
+                        # stay unclaimed, so _steal() can still split them off.
+                        if not self.w.limiter.consume(len(chunk), self.stopped):
+                            return False
                         with self.lock:  # reserve, so a concurrent split sees the bytes as taken
                             chunk = chunk[:max(0, seg.remaining)]  # never write past this segment
                             offset = seg.start + seg.done

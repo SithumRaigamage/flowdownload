@@ -217,6 +217,29 @@ def test_connections_setting_saves(ui):
     assert mgr.settings.connections_per_download == 2
 
 
+def test_dock_speed_limit_toggle(ui):
+    mgr, page = ui()
+    assert page.wait_js("document.getElementById('speedLimitBtn').getAttribute('aria-pressed') === 'false'")
+    page.js("document.getElementById('speedLimitBtn').click()")
+    assert page.wait_js("settingsCache.speed_limit_enabled === true")
+    assert mgr.limiter.rate == mgr.settings.speed_limit_bps
+    assert page.js("document.getElementById('speedLimitLabel').textContent") == "Limit 1.0 MB/s"
+    page.js("document.getElementById('speedLimitBtn').click()")
+    assert page.wait_js("settingsCache.speed_limit_enabled === false")
+    assert mgr.limiter.rate == 0
+
+
+def test_speed_limit_value_saves(ui):
+    mgr, page = ui()
+    page.js("document.getElementById('settingsBtn').click()")
+    assert page.wait_js("!!document.querySelector('[data-st=\"Downloads\"]')")
+    page.js("document.querySelector('[data-st=\"Downloads\"]').click()")
+    assert page.wait_js("!!document.getElementById('setSpeed')")
+    page.js("(document.getElementById('setSpeed').value = '512', document.getElementById('setSpeedUnit').value = 'KB')")
+    page.js("document.getElementById('setSpeedSave').click()")
+    assert page.wait_js("settingsCache.speed_limit_bps === 512 * 1024")
+    assert mgr.settings.speed_limit_bps == 512 * 1024
+
 def test_reconnect_resyncs_events_missed_while_disconnected(ui, server, wait):
     mgr, page = ui()
     # Drop the socket and add a download before it reconnects (~1 s later):
