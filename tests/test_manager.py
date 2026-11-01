@@ -69,6 +69,21 @@ def test_downloads_at_once_alone_decides_by_default(make_manager):
     assert sum(1 for t in mgr.tasks.values() if t.status == S.DOWNLOADING) == 30
 
 
+def test_expiring_links_are_not_held_in_the_queue(make_manager):
+    # Signed links (expiry in the path) once waited for the site's measured
+    # speed, so a batch trickled out one at a time despite free slots.
+    mgr = make_manager(max_concurrent_downloads=30, site_connection_limit=15)
+    mgr._spawn = lambda task_id: setattr(mgr.tasks[task_id], "status", S.DOWNLOADING)
+    expiry = int(time.time()) + 3000
+    for i in range(5):
+        task = DownloadTask(url=f"https://s{i}.trafficdeposit.com/vidi/sig/tok/{expiry}/{i}/x.vid",
+                            dest_path=f"/tmp/fd-exp-{i}")
+        task.created_at = time.time() + i
+        mgr.tasks[task.id] = task
+    mgr._dispatch_queue()
+    assert all(t.status == S.DOWNLOADING for t in mgr.tasks.values())
+
+
 def test_auto_folder_by_type(make_manager, server, wait, tmp_path):
     mgr = make_manager(auto_folder_by_type=True)
     task = mgr.tasks[mgr.add_download(f"{server}/movie.mp4", "movie.mp4")]

@@ -14,6 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.engine import segmented
 from app.engine.models import DownloadStatus
+from app.engine.paths import link_expiry
 from app.engine.retry_policy import compute_retry_delay
 
 CHUNK_SIZE = 64 * 1024
@@ -40,6 +41,47 @@ PERMANENT_HTTP_STATUSES = {400, 401, 403, 404, 405, 406, 410, 451}
 def _is_permanent_http_error(exc: requests.exceptions.RequestException) -> bool:
     response = getattr(exc, "response", None)
     return response is not None and response.status_code in PERMANENT_HTTP_STATUSES
+
+
+# "Too many connections from you right now" (trafficdeposit answers 503 to
+# every connection past a handful per IP). Nothing is wrong with the
+# download: a slot frees up when another one finishes.
+SERVER_BUSY_STATUSES = {429, 503}
+# Busy retries never give up and back off no further than this attempt's
+# delay (~8 s), so a waiting download takes a freed slot quickly.
+BUSY_RETRY_ATTEMPT = 4
+
+
+def _is_server_busy(exc: requests.exceptions.RequestException) -> bool:
+    response = getattr(exc, "response", None)
+    return response is not None and response.status_code in SERVER_BUSY_STATUSES
+
+
+def _retry_delay(attempt: int, exc: requests.exceptions.RequestException) -> float | None:
+    """Seconds to wait before retry number `attempt`, or None to give up."""
+    if _is_server_busy(exc):
+        return compute_retry_delay(min(attempt, BUSY_RETRY_ATTEMPT))
+    return compute_retry_delay(attempt)
+
+
+LINK_EXPIRED_MESSAGE = "Link expired — open the video page in Chrome and click download again to resume"
+
+
+def _link_expired(url: str, now: float) -> bool:
+    """True when url is a signed link whose built-in expiry time has passed.
+    Past it the server answers 403, which on its own reads like "forbidden"
+    rather than "go get a fresh link"."""
+    expiry = link_expiry(url)
+    return expiry is not None and expiry < now
+
+
+def _permanent_error_message(url: str, exc: requests.exceptions.RequestException) -> str:
+    """What to show for a permanent HTTP error: a hint to refresh the link
+    when it has expired, otherwise the server's own error."""
+    response = getattr(exc, "response", None)
+    if response is not None and response.status_code in (403, 410) and _link_expired(url, time.time()):
+        return LINK_EXPIRED_MESSAGE
+    return str(exc)
 
 
 class Paused(Exception):
@@ -127,15 +169,17 @@ class DownloadWorker(QThread):
         self.status_changed.emit(self.task_id, DownloadStatus.COMPLETED.value, "")
 
     def run(self) -> None:
-        try:
-            if segmented.run_segmented(self):
-                return
-        except Exception as exc:  # noqa: BLE001 -- never die silently and leave the task "downloading"
-            self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, f"{exc.__class__.__name__}: {exc}")
-            return
         attempt = 0
+        split_decided = False
         while True:
             try:
+                # Until the probe gets an answer, a failed one is retried
+                # like any connection: falling back to a single stream on a
+                # passing 503 would leave the whole file on one connection.
+                if not split_decided:
+                    if self._run_segmented():
+                        return
+                    split_decided = True
                 downloaded = self._attempt_download()
                 self._complete(downloaded)
                 return
@@ -145,12 +189,13 @@ class DownloadWorker(QThread):
                 return
             except requests.exceptions.RequestException as exc:
                 if _is_permanent_http_error(exc):
-                    self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
+                    self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value,
+                                             _permanent_error_message(self.url, exc))
                     return
                 if self._attempt_bytes > 0:
                     attempt = 0  # this connection made progress -- start the backoff over
                 attempt += 1
-                delay = compute_retry_delay(attempt)
+                delay = _retry_delay(attempt, exc)
                 if delay is None:
                     self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
                     return
@@ -167,6 +212,18 @@ class DownloadWorker(QThread):
             except OSError as exc:
                 self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, str(exc))
                 return
+
+    def _run_segmented(self) -> bool:
+        """segmented.run_segmented, where a failed probe (RequestException)
+        goes to run()'s retry loop and anything unexpected fails the task
+        instead of killing the thread with it left "downloading"."""
+        try:
+            return segmented.run_segmented(self)
+        except requests.exceptions.RequestException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.status_changed.emit(self.task_id, DownloadStatus.FAILED.value, f"{exc.__class__.__name__}: {exc}")
+            return True
 
     def _base_headers(self) -> dict:
         """Headers every request for this download carries (cookies go

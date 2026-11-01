@@ -72,6 +72,40 @@ def test_permanent_http_error_fails_without_retry(server, tmp_path, wait, attemp
     assert attempts == []
 
 
+def last_failure_message(url, tmp_path, wait):
+    worker = DownloadWorker("t", url, str(tmp_path / "out.bin"), "", "", "", requests.Session())
+    _WORKERS.append(worker)
+    messages: list[str] = []
+    worker.status_changed.connect(lambda _tid, _status, msg: messages.append(msg))
+    worker.start()
+    assert wait(lambda: worker.isFinished(), timeout=30)
+    worker.wait()
+    wait(lambda: False, timeout=0.1)
+    return messages[-1]
+
+
+def test_expired_signed_link_says_so(server, tmp_path, wait, attempts):
+    message = last_failure_message(f"{server}/vidi/sig/1000000000/x.vid?status=403", tmp_path, wait)
+    assert message == downloader.LINK_EXPIRED_MESSAGE
+
+
+def test_forbidden_without_expiry_keeps_server_error(server, tmp_path, wait, attempts):
+    message = last_failure_message(f"{server}/plain/x.vid?status=403", tmp_path, wait)
+    assert "403" in message
+
+
+@pytest.mark.parametrize("url, expired", [
+    ("https://c10.trafficdeposit.com/vidi/a1/tok/1793389545/68e2/x.vid", False),  # expires after `now`
+    ("https://c10.trafficdeposit.com/vidi/a1/tok/1793380000/68e2/x.vid", True),
+    ("https://cdn.test/x.mp4?expires=1793380000&sig=ab", True),
+    ("https://cdn.test/x.mp4?e=1793389545", False),
+    ("https://cdn.test/videos/12345/x.mp4", False),  # an id, not a timestamp
+    ("https://cdn.test/x.mp4", False),
+])
+def test_link_expired(url, expired):
+    assert downloader._link_expired(url, now=1793386590) is expired
+
+
 def test_referer_is_sent_on_every_connection(server, tmp_path, wait, attempts):
     REQUESTS.clear()
     statuses = run_worker(f"{server}/ref?drop=100000", tmp_path, wait, referrer="https://page.test/watch")

@@ -8,4 +8,4 @@ dist/
 build/
 app/AppIcon.iconset/
 
-.claude/.pytest_cache/
+.claude/
